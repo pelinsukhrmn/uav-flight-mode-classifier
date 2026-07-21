@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import confusion_matrix, classification_report
+from sklearn.utils.class_weight import compute_class_weight
 from tensorflow import keras
 
 FEATURES = ["vertical_speed", "horizontal_speed", "roll_angle", "pitch_angle"]
@@ -113,8 +114,15 @@ model = keras.Sequential([
 
 model.compile(optimizer="adam", loss="sparse_categorical_crossentropy", metrics=["accuracy"])
 
+class_weights = compute_class_weight(class_weight="balanced", classes=np.unique(y_train), y=y_train)
+class_weight_dict = {i: weight for i, weight in enumerate(class_weights)}
+
+print("\nClass weights:")
+for i, weight in class_weight_dict.items():
+    print(f"  {index_to_label[i]:<12} {weight:.3f}")
+
 print("\nTraining LSTM model...")
-model.fit(X_train_scaled, y_train, validation_split=0.15, epochs=20, batch_size=32, verbose=2)
+model.fit(X_train_scaled, y_train, validation_split=0.15, epochs=20, batch_size=32, class_weight=class_weight_dict, verbose=2)
 
 test_loss, test_accuracy = model.evaluate(X_test_scaled, y_test, verbose=0)
 print(f"\nTest Accuracy: {test_accuracy * 100:.2f}%")

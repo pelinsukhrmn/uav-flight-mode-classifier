@@ -1,19 +1,36 @@
 # UAV Flight Mode Classifier
 
-A multi-class classification model using Random Forest to predict a UAV's flight mode (hover, ascend, descend, cruise, transition) from sensor readings.
+Two models that predict a UAV's flight mode from sensor readings (vertical speed, horizontal speed, roll angle, pitch angle).
 
-- Features: vertical speed, horizontal speed, roll angle, pitch angle
+## flight_mode_classifier.py
+
+Multi-class classification on independent sensor readings (hover, ascend, descend, cruise, transition).
+
 - Dataset: Synthetic (generated with numpy, based on realistic per-mode sensor ranges, with blended transition samples between adjacent modes)
 - Algorithm: Random Forest Classifier
+
+Run:
+
+```bash
+python flight_mode_classifier.py
+```
+
+## flight_sequence_classifier.py
+
+Time-series classification over sliding windows of consecutive sensor readings, with an added `anomaly` class simulating sensor malfunction or erratic control loss.
+
+- Dataset: Synthetic continuous flight logs (multiple simulated flights, each cycling through hover, ascend, cruise, descend with smooth transitions, and occasional injected anomaly segments)
+- Algorithm: LSTM (Keras/TensorFlow), trained on 10-timestep sliding windows
+- Train/test split is done by flight, not by window, to avoid data leakage between overlapping windows
+
+Run:
+
+```bash
+python flight_sequence_classifier.py
+```
 
 ## Setup
 
 ```bash
 pip install -r requirements.txt
-```
-
-## Run
-
-```bash
-python flight_mode_classifier.py
 ```

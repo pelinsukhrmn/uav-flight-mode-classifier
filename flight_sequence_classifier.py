@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import joblib
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import confusion_matrix, classification_report
 from sklearn.utils.class_weight import compute_class_weight
@@ -132,6 +133,7 @@ architectures = {
 }
 
 results = {}
+trained_models = {}
 y_test_named = [index_to_label[i] for i in y_test]
 
 for name, recurrent_layer in architectures.items():
@@ -149,6 +151,7 @@ for name, recurrent_layer in architectures.items():
         "confusion_matrix": confusion_matrix(y_test_named, predictions_named, labels=classes),
         "report": classification_report(y_test_named, predictions_named, labels=classes),
     }
+    trained_models[name] = model
 
 print("\n=== Architecture Comparison ===")
 for name, result in results.items():
@@ -157,3 +160,11 @@ for name, result in results.items():
     print(result["confusion_matrix"])
     print("Classification Report:")
     print(result["report"])
+
+best_name = max(results, key=lambda name: results[name]["accuracy"])
+best_model = trained_models[best_name]
+
+print(f"\nSaving best model ({best_name}) for reuse on real flight logs...")
+best_model.save("flight_mode_model.keras")
+joblib.dump(scaler, "flight_mode_scaler.joblib")
+joblib.dump({"classes": classes, "features": ALL_FEATURES, "window_size": WINDOW_SIZE}, "flight_mode_meta.joblib")

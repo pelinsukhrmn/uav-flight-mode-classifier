@@ -69,11 +69,11 @@ def generate_flight(flight_id, rng, anomaly_prob=0.35):
     df["flight_id"] = flight_id
     return df
 
-def build_windows(df, window_size):
+def build_windows(df, window_size, feature_columns):
     X_windows = []
     y_windows = []
     for _, group in df.groupby("flight_id"):
-        features = group[FEATURES].to_numpy()
+        features = group[feature_columns].to_numpy()
         labels = group["mode"].to_numpy()
         for start in range(len(group) - window_size + 1):
             X_windows.append(features[start:start + window_size])
@@ -84,14 +84,20 @@ rng = np.random.default_rng(42)
 flights = [generate_flight(i, rng) for i in range(N_FLIGHTS)]
 data = pd.concat(flights, ignore_index=True)
 
+DELTA_FEATURES = [f"{feature}_delta" for feature in FEATURES]
+for feature, delta_feature in zip(FEATURES, DELTA_FEATURES):
+    data[delta_feature] = data.groupby("flight_id")[feature].diff().fillna(0)
+
+ALL_FEATURES = FEATURES + DELTA_FEATURES
+
 print("Total timesteps:", len(data))
 print(data["mode"].value_counts())
 
 train_df = data[data["flight_id"] < N_TRAIN_FLIGHTS]
 test_df = data[data["flight_id"] >= N_TRAIN_FLIGHTS]
 
-X_train, y_train_labels = build_windows(train_df, WINDOW_SIZE)
-X_test, y_test_labels = build_windows(test_df, WINDOW_SIZE)
+X_train, y_train_labels = build_windows(train_df, WINDOW_SIZE, ALL_FEATURES)
+X_test, y_test_labels = build_windows(test_df, WINDOW_SIZE, ALL_FEATURES)
 
 classes = sorted(data["mode"].unique())
 label_to_index = {label: i for i, label in enumerate(classes)}

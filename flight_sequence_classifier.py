@@ -111,15 +111,6 @@ scaler = StandardScaler()
 X_train_scaled = scaler.fit_transform(X_train.reshape(-1, n_features)).reshape(n_train, window_size, n_features)
 X_test_scaled = scaler.transform(X_test.reshape(-1, n_features)).reshape(X_test.shape[0], window_size, n_features)
 
-model = keras.Sequential([
-    keras.layers.Input(shape=(WINDOW_SIZE, n_features)),
-    keras.layers.LSTM(32),
-    keras.layers.Dense(16, activation="relu"),
-    keras.layers.Dense(len(classes), activation="softmax"),
-])
-
-model.compile(optimizer="adam", loss="sparse_categorical_crossentropy", metrics=["accuracy"])
-
 class_weights = compute_class_weight(class_weight="balanced", classes=np.unique(y_train), y=y_train)
 class_weight_dict = {i: weight for i, weight in enumerate(class_weights)}
 
@@ -127,17 +118,42 @@ print("\nClass weights:")
 for i, weight in class_weight_dict.items():
     print(f"  {index_to_label[i]:<12} {weight:.3f}")
 
-print("\nTraining LSTM model...")
-model.fit(X_train_scaled, y_train, validation_split=0.15, epochs=20, batch_size=32, class_weight=class_weight_dict, verbose=2)
+def build_model(recurrent_layer):
+    return keras.Sequential([
+        keras.layers.Input(shape=(WINDOW_SIZE, n_features)),
+        recurrent_layer,
+        keras.layers.Dense(16, activation="relu"),
+        keras.layers.Dense(len(classes), activation="softmax"),
+    ])
 
-test_loss, test_accuracy = model.evaluate(X_test_scaled, y_test, verbose=0)
-print(f"\nTest Accuracy: {test_accuracy * 100:.2f}%")
+architectures = {
+    "LSTM": keras.layers.LSTM(32),
+    "GRU": keras.layers.GRU(32),
+}
 
-predictions = np.argmax(model.predict(X_test_scaled, verbose=0), axis=1)
+results = {}
 y_test_named = [index_to_label[i] for i in y_test]
-predictions_named = [index_to_label[i] for i in predictions]
 
-print("\nConfusion Matrix:")
-print(confusion_matrix(y_test_named, predictions_named, labels=classes))
-print("\nClassification Report:")
-print(classification_report(y_test_named, predictions_named, labels=classes))
+for name, recurrent_layer in architectures.items():
+    print(f"\nTraining {name} model...")
+    model = build_model(recurrent_layer)
+    model.compile(optimizer="adam", loss="sparse_categorical_crossentropy", metrics=["accuracy"])
+    model.fit(X_train_scaled, y_train, validation_split=0.15, epochs=20, batch_size=32, class_weight=class_weight_dict, verbose=2)
+
+    test_loss, test_accuracy = model.evaluate(X_test_scaled, y_test, verbose=0)
+    predictions = np.argmax(model.predict(X_test_scaled, verbose=0), axis=1)
+    predictions_named = [index_to_label[i] for i in predictions]
+
+    results[name] = {
+        "accuracy": test_accuracy,
+        "confusion_matrix": confusion_matrix(y_test_named, predictions_named, labels=classes),
+        "report": classification_report(y_test_named, predictions_named, labels=classes),
+    }
+
+print("\n=== Architecture Comparison ===")
+for name, result in results.items():
+    print(f"\n{name} Test Accuracy: {result['accuracy'] * 100:.2f}%")
+    print("Confusion Matrix:")
+    print(result["confusion_matrix"])
+    print("Classification Report:")
+    print(result["report"])

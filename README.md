@@ -19,9 +19,10 @@ python flight_mode_classifier.py
 
 Time-series classification over sliding windows of consecutive sensor readings, with an added `anomaly` class simulating sensor malfunction or erratic control loss.
 
-- Dataset: Synthetic continuous flight logs (multiple simulated flights, each cycling through hover, ascend, cruise, descend with smooth transitions, and occasional injected anomaly segments)
+- Dataset: Synthetic continuous flight logs (120 simulated flights, each cycling through hover, ascend, cruise, descend with smooth transitions, and occasional injected anomaly segments)
 - Algorithm: LSTM (Keras/TensorFlow), trained on 10-timestep sliding windows
 - Train/test split is done by flight, not by window, to avoid data leakage between overlapping windows
+- Class weighting (`sklearn.utils.class_weight`) is used to counter the rarity of the `anomaly` class
 
 Run:
 

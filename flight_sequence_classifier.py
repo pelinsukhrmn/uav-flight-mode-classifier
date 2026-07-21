@@ -8,8 +8,8 @@ from tensorflow import keras
 FEATURES = ["vertical_speed", "horizontal_speed", "roll_angle", "pitch_angle"]
 CYCLE = ["hover", "ascend", "cruise", "descend"]
 WINDOW_SIZE = 10
-N_FLIGHTS = 40
-N_TRAIN_FLIGHTS = 32
+N_FLIGHTS = 120
+N_TRAIN_FLIGHTS = 96
 
 MODE_PARAMS = {
     "hover": {"vertical_speed": (0.0, 0.15), "horizontal_speed": (0.3, 0.2), "roll_angle": (0.0, 1.0), "pitch_angle": (0.0, 1.0)},

@@ -6,22 +6,74 @@ from sklearn.metrics import accuracy_score, confusion_matrix, classification_rep
 
 np.random.seed(42)
 n_per_mode = 300
+n_transition = 300
 
-def generate_mode(mode, vertical_speed, horizontal_speed, roll_angle, pitch_angle, n):
+mode_params = {
+    "hover": {
+        "vertical_speed": (0.0, 0.15),
+        "horizontal_speed": (0.3, 0.2),
+        "roll_angle": (0.0, 1.0),
+        "pitch_angle": (0.0, 1.0),
+    },
+    "ascend": {
+        "vertical_speed": (3.0, 0.8),
+        "horizontal_speed": (1.0, 0.6),
+        "roll_angle": (0.0, 2.0),
+        "pitch_angle": (8.0, 2.5),
+    },
+    "cruise": {
+        "vertical_speed": (0.0, 0.3),
+        "horizontal_speed": (10.0, 2.5),
+        "roll_angle": (5.0, 4.0),
+        "pitch_angle": (5.0, 3.0),
+    },
+    "descend": {
+        "vertical_speed": (-3.0, 0.8),
+        "horizontal_speed": (1.0, 0.6),
+        "roll_angle": (0.0, 2.0),
+        "pitch_angle": (-8.0, 2.5),
+    },
+}
+
+transition_pairs = [
+    ("hover", "ascend"),
+    ("ascend", "cruise"),
+    ("cruise", "descend"),
+    ("descend", "hover"),
+]
+
+def generate_mode(mode, params, n):
     return pd.DataFrame({
-        "vertical_speed": np.random.normal(vertical_speed[0], vertical_speed[1], n),
-        "horizontal_speed": np.clip(np.random.normal(horizontal_speed[0], horizontal_speed[1], n), 0, None),
-        "roll_angle": np.random.normal(roll_angle[0], roll_angle[1], n),
-        "pitch_angle": np.random.normal(pitch_angle[0], pitch_angle[1], n),
+        "vertical_speed": np.random.normal(params["vertical_speed"][0], params["vertical_speed"][1], n),
+        "horizontal_speed": np.random.normal(params["horizontal_speed"][0], params["horizontal_speed"][1], n),
+        "roll_angle": np.random.normal(params["roll_angle"][0], params["roll_angle"][1], n),
+        "pitch_angle": np.random.normal(params["pitch_angle"][0], params["pitch_angle"][1], n),
         "mode": mode,
     })
 
-hover = generate_mode("hover", (0.0, 0.15), (0.3, 0.2), (0.0, 1.0), (0.0, 1.0), n_per_mode)
-ascend = generate_mode("ascend", (3.0, 0.8), (1.0, 0.6), (0.0, 2.0), (8.0, 2.5), n_per_mode)
-descend = generate_mode("descend", (-3.0, 0.8), (1.0, 0.6), (0.0, 2.0), (-8.0, 2.5), n_per_mode)
-cruise = generate_mode("cruise", (0.0, 0.3), (10.0, 2.5), (5.0, 4.0), (5.0, 3.0), n_per_mode)
+def generate_transitions(pairs, params, n):
+    features = ["vertical_speed", "horizontal_speed", "roll_angle", "pitch_angle"]
+    pair_indices = np.random.randint(0, len(pairs), n)
+    alphas = np.random.uniform(0.3, 0.7, n)
+    rows = []
+    for pair_index, alpha in zip(pair_indices, alphas):
+        mode_a, mode_b = pairs[pair_index]
+        row = {}
+        for feature in features:
+            mean_a, std_a = params[mode_a][feature]
+            mean_b, std_b = params[mode_b][feature]
+            blended_mean = alpha * mean_a + (1 - alpha) * mean_b
+            noise_std = max(std_a, std_b) * 1.5
+            row[feature] = np.random.normal(blended_mean, noise_std)
+        row["mode"] = "transition"
+        rows.append(row)
+    return pd.DataFrame(rows)
 
-data = pd.concat([hover, ascend, descend, cruise], ignore_index=True)
+frames = [generate_mode(mode, params, n_per_mode) for mode, params in mode_params.items()]
+frames.append(generate_transitions(transition_pairs, mode_params, n_transition))
+
+data = pd.concat(frames, ignore_index=True)
+data["horizontal_speed"] = data["horizontal_speed"].clip(lower=0)
 data = data.sample(frac=1, random_state=42).reset_index(drop=True)
 
 print("Dataset shape:", data.shape)
@@ -33,7 +85,7 @@ y = data["mode"]
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
 
 print("\nTraining Random Forest model...")
-model = RandomForestClassifier(n_estimators=100, random_state=42)
+model = RandomForestClassifier(n_estimators=200, random_state=42)
 model.fit(X_train, y_train)
 
 predictions = model.predict(X_test)
@@ -52,6 +104,7 @@ for feature, importance in zip(X.columns, model.feature_importances_):
 sample_readings = pd.DataFrame([
     {"vertical_speed": 0.05, "horizontal_speed": 0.4, "roll_angle": 0.5, "pitch_angle": 0.3},
     {"vertical_speed": 0.1, "horizontal_speed": 10.5, "roll_angle": 5.0, "pitch_angle": 5.5},
+    {"vertical_speed": 1.4, "horizontal_speed": 0.7, "roll_angle": 1.0, "pitch_angle": 4.5},
 ])
 sample_predictions = model.predict(sample_readings)
 

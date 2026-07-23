@@ -15,6 +15,12 @@ mode_params = {
         "roll_angle": (0.0, 1.0),
         "pitch_angle": (0.0, 1.0),
     },
+    "takeoff": {
+        "vertical_speed": (2.0, 0.5),
+        "horizontal_speed": (0.2, 0.15),
+        "roll_angle": (0.0, 1.0),
+        "pitch_angle": (2.0, 1.5),
+    },
     "ascend": {
         "vertical_speed": (3.0, 0.8),
         "horizontal_speed": (1.0, 0.6),
@@ -27,20 +33,28 @@ mode_params = {
         "roll_angle": (5.0, 4.0),
         "pitch_angle": (5.0, 3.0),
     },
+    "rtl": {
+        "vertical_speed": (-0.5, 0.4),
+        "horizontal_speed": (12.0, 2.5),
+        "roll_angle": (2.0, 2.5),
+        "pitch_angle": (6.0, 3.0),
+    },
     "descend": {
         "vertical_speed": (-3.0, 0.8),
         "horizontal_speed": (1.0, 0.6),
         "roll_angle": (0.0, 2.0),
         "pitch_angle": (-8.0, 2.5),
     },
+    "land": {
+        "vertical_speed": (-1.2, 0.4),
+        "horizontal_speed": (0.2, 0.15),
+        "roll_angle": (0.0, 1.0),
+        "pitch_angle": (-2.0, 1.5),
+    },
 }
 
-transition_pairs = [
-    ("hover", "ascend"),
-    ("ascend", "cruise"),
-    ("cruise", "descend"),
-    ("descend", "hover"),
-]
+MODE_CYCLE = ["hover", "takeoff", "ascend", "cruise", "rtl", "descend", "land"]
+transition_pairs = [(MODE_CYCLE[i], MODE_CYCLE[(i + 1) % len(MODE_CYCLE)]) for i in range(len(MODE_CYCLE))]
 
 def generate_mode(mode, params, n):
     return pd.DataFrame({

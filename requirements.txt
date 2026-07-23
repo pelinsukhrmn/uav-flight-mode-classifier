@@ -4,3 +4,5 @@ pandas
 tensorflow-cpu
 pyulog
 joblib
+matplotlib
+streamlit

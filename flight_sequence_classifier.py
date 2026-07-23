@@ -7,16 +7,19 @@ from sklearn.utils.class_weight import compute_class_weight
 from tensorflow import keras
 
 FEATURES = ["vertical_speed", "horizontal_speed", "roll_angle", "pitch_angle"]
-CYCLE = ["hover", "ascend", "cruise", "descend"]
+CYCLE = ["hover", "takeoff", "ascend", "cruise", "rtl", "descend", "land"]
 WINDOW_SIZE = 10
 N_FLIGHTS = 120
 N_TRAIN_FLIGHTS = 96
 
 MODE_PARAMS = {
     "hover": {"vertical_speed": (0.0, 0.15), "horizontal_speed": (0.3, 0.2), "roll_angle": (0.0, 1.0), "pitch_angle": (0.0, 1.0)},
+    "takeoff": {"vertical_speed": (2.0, 0.5), "horizontal_speed": (0.2, 0.15), "roll_angle": (0.0, 1.0), "pitch_angle": (2.0, 1.5)},
     "ascend": {"vertical_speed": (3.0, 0.8), "horizontal_speed": (1.0, 0.6), "roll_angle": (0.0, 2.0), "pitch_angle": (8.0, 2.5)},
     "cruise": {"vertical_speed": (0.0, 0.3), "horizontal_speed": (10.0, 2.5), "roll_angle": (5.0, 4.0), "pitch_angle": (5.0, 3.0)},
+    "rtl": {"vertical_speed": (-0.5, 0.4), "horizontal_speed": (12.0, 2.5), "roll_angle": (2.0, 2.5), "pitch_angle": (6.0, 3.0)},
     "descend": {"vertical_speed": (-3.0, 0.8), "horizontal_speed": (1.0, 0.6), "roll_angle": (0.0, 2.0), "pitch_angle": (-8.0, 2.5)},
+    "land": {"vertical_speed": (-1.2, 0.4), "horizontal_speed": (0.2, 0.15), "roll_angle": (0.0, 1.0), "pitch_angle": (-2.0, 1.5)},
 }
 
 def sample_mode_segment(mode, n, rng):
@@ -119,26 +122,32 @@ print("\nClass weights:")
 for i, weight in class_weight_dict.items():
     print(f"  {index_to_label[i]:<12} {weight:.3f}")
 
-def build_model(recurrent_layer):
+def build_model(feature_layers):
     return keras.Sequential([
         keras.layers.Input(shape=(WINDOW_SIZE, n_features)),
-        recurrent_layer,
+        *feature_layers,
+        keras.layers.Dropout(0.2),
         keras.layers.Dense(16, activation="relu"),
         keras.layers.Dense(len(classes), activation="softmax"),
     ])
 
 architectures = {
-    "LSTM": keras.layers.LSTM(32),
-    "GRU": keras.layers.GRU(32),
+    "LSTM": [keras.layers.LSTM(32)],
+    "GRU": [keras.layers.GRU(32)],
+    "Conv1D": [
+        keras.layers.Conv1D(32, kernel_size=3, activation="relu", padding="causal"),
+        keras.layers.Conv1D(32, kernel_size=3, activation="relu", padding="causal"),
+        keras.layers.GlobalAveragePooling1D(),
+    ],
 }
 
 results = {}
 trained_models = {}
 y_test_named = [index_to_label[i] for i in y_test]
 
-for name, recurrent_layer in architectures.items():
+for name, feature_layers in architectures.items():
     print(f"\nTraining {name} model...")
-    model = build_model(recurrent_layer)
+    model = build_model(feature_layers)
     model.compile(optimizer="adam", loss="sparse_categorical_crossentropy", metrics=["accuracy"])
     model.fit(X_train_scaled, y_train, validation_split=0.15, epochs=20, batch_size=32, class_weight=class_weight_dict, verbose=2)
 

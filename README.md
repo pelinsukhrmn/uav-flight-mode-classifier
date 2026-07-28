@@ -2,6 +2,8 @@
 
 Models that predict a UAV's flight mode from sensor readings (vertical speed, horizontal speed, roll angle, pitch angle), including a version that runs on a real PX4 flight log.
 
+Live demo: https://pelinsukhrmn-uav-flight-mode-classifier-app-u3jseo.streamlit.app
+
 ## flight_data.py
 
 Shared constants used by both classifiers: `FEATURES`, `MODE_CYCLE`, and `MODE_PARAMS` (the per-mode sensor mean/std used to generate synthetic data).

@@ -4,6 +4,12 @@ Models that predict a UAV's flight mode from sensor readings (vertical speed, ho
 
 Live demo: https://pelinsukhrmn-uav-flight-mode-classifier-app-u3jseo.streamlit.app
 
+## Setup
+
+```bash
+pip install -r requirements.txt
+```
+
 ## flight_data.py
 
 Shared constants used by both classifiers: `FEATURES`, `MODE_CYCLE`, and `MODE_PARAMS` (the per-mode sensor mean/std used to generate synthetic data).
@@ -81,10 +87,4 @@ Run:
 
 ```bash
 streamlit run app.py
-```
-
-## Setup
-
-```bash
-pip install -r requirements.txt
 ```

@@ -4,64 +4,22 @@ from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, confusion_matrix, classification_report
 
+from flight_data import MODE_PARAMS as mode_params, MODE_CYCLE, TRAVEL_MODES, SPEED_FEATURES, SPEED_SCALE_RANGE, PITCH_TRIM_RANGE
+
 np.random.seed(42)
 n_per_mode = 300
 n_transition = 300
 
-mode_params = {
-    "hover": {
-        "vertical_speed": (0.0, 0.15),
-        "horizontal_speed": (0.3, 0.2),
-        "roll_angle": (0.0, 1.0),
-        "pitch_angle": (0.0, 1.0),
-    },
-    "takeoff": {
-        "vertical_speed": (2.0, 0.5),
-        "horizontal_speed": (0.2, 0.15),
-        "roll_angle": (0.0, 1.0),
-        "pitch_angle": (2.0, 1.5),
-    },
-    "ascend": {
-        "vertical_speed": (3.0, 0.8),
-        "horizontal_speed": (1.0, 0.6),
-        "roll_angle": (0.0, 2.0),
-        "pitch_angle": (8.0, 2.5),
-    },
-    "cruise": {
-        "vertical_speed": (0.0, 0.3),
-        "horizontal_speed": (10.0, 2.5),
-        "roll_angle": (5.0, 4.0),
-        "pitch_angle": (5.0, 3.0),
-    },
-    "rtl": {
-        "vertical_speed": (-0.5, 0.4),
-        "horizontal_speed": (12.0, 2.5),
-        "roll_angle": (2.0, 2.5),
-        "pitch_angle": (6.0, 3.0),
-    },
-    "descend": {
-        "vertical_speed": (-3.0, 0.8),
-        "horizontal_speed": (1.0, 0.6),
-        "roll_angle": (0.0, 2.0),
-        "pitch_angle": (-8.0, 2.5),
-    },
-    "land": {
-        "vertical_speed": (-1.2, 0.4),
-        "horizontal_speed": (0.2, 0.15),
-        "roll_angle": (0.0, 1.0),
-        "pitch_angle": (-2.0, 1.5),
-    },
-}
-
-MODE_CYCLE = ["hover", "takeoff", "ascend", "cruise", "rtl", "descend", "land"]
 transition_pairs = [(MODE_CYCLE[i], MODE_CYCLE[(i + 1) % len(MODE_CYCLE)]) for i in range(len(MODE_CYCLE))]
 
 def generate_mode(mode, params, n):
+    speed_scale = np.random.uniform(*SPEED_SCALE_RANGE, n) if mode in TRAVEL_MODES else np.ones(n)
+    pitch_trim = np.random.uniform(*PITCH_TRIM_RANGE, n)
     return pd.DataFrame({
-        "vertical_speed": np.random.normal(params["vertical_speed"][0], params["vertical_speed"][1], n),
-        "horizontal_speed": np.random.normal(params["horizontal_speed"][0], params["horizontal_speed"][1], n),
+        "vertical_speed": np.random.normal(params["vertical_speed"][0], params["vertical_speed"][1], n) * speed_scale,
+        "horizontal_speed": np.random.normal(params["horizontal_speed"][0], params["horizontal_speed"][1], n) * speed_scale,
         "roll_angle": np.random.normal(params["roll_angle"][0], params["roll_angle"][1], n),
-        "pitch_angle": np.random.normal(params["pitch_angle"][0], params["pitch_angle"][1], n),
+        "pitch_angle": np.random.normal(params["pitch_angle"][0], params["pitch_angle"][1], n) + pitch_trim,
         "mode": mode,
     })
 
@@ -69,15 +27,23 @@ def generate_transitions(pairs, params, n):
     features = ["vertical_speed", "horizontal_speed", "roll_angle", "pitch_angle"]
     pair_indices = np.random.randint(0, len(pairs), n)
     alphas = np.random.uniform(0.3, 0.7, n)
+    speed_scales = np.random.uniform(*SPEED_SCALE_RANGE, n)
+    pitch_trims = np.random.uniform(*PITCH_TRIM_RANGE, n)
     rows = []
-    for pair_index, alpha in zip(pair_indices, alphas):
+    for pair_index, alpha, speed_scale, pitch_trim in zip(pair_indices, alphas, speed_scales, pitch_trims):
         mode_a, mode_b = pairs[pair_index]
+        involves_travel_mode = mode_a in TRAVEL_MODES or mode_b in TRAVEL_MODES
         row = {}
         for feature in features:
             mean_a, std_a = params[mode_a][feature]
             mean_b, std_b = params[mode_b][feature]
             blended_mean = alpha * mean_a + (1 - alpha) * mean_b
             noise_std = max(std_a, std_b) * 1.5
+            if involves_travel_mode and feature in SPEED_FEATURES:
+                blended_mean *= speed_scale
+                noise_std *= speed_scale
+            if feature == "pitch_angle":
+                blended_mean += pitch_trim
             row[feature] = np.random.normal(blended_mean, noise_std)
         row["mode"] = "transition"
         rows.append(row)

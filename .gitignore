@@ -9,7 +9,4 @@ env/
 .env
 .DS_Store
 Thumbs.db
-flight_mode_model.keras
-flight_mode_scaler.joblib
-flight_mode_meta.joblib
 *_flight_mode_timeline.png

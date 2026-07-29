@@ -10,3 +10,4 @@ env/
 .DS_Store
 Thumbs.db
 *_flight_mode_timeline.png
+.ulg/

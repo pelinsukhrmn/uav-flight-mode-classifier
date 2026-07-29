@@ -6,6 +6,21 @@ from tensorflow import keras
 import matplotlib.cm as cm
 
 
+# PX4 vehicle_status.nav_state values with an unambiguous match to one of our
+# mission-cycle labels. Values left out on purpose (MANUAL, ALTCTL, POSCTL,
+# STAB, ACRO, OFFBOARD, AUTO_MISSION, ...) don't map to a single label -
+# AUTO_MISSION alone could be ascend/cruise/descend/hover depending on which
+# leg of the mission it is, and the manual modes have no equivalent at all.
+NAV_STATE_TO_MODE = {
+    4: "hover",          # AUTO_LOITER
+    17: "takeoff",       # AUTO_TAKEOFF
+    22: "takeoff",       # AUTO_VTOL_TAKEOFF
+    18: "land",          # AUTO_LAND
+    20: "land",          # AUTO_PRECLAND
+    5: "rtl",            # AUTO_RTL
+}
+
+
 def quaternion_to_roll_pitch(q0, q1, q2, q3):
     sinr_cosp = 2 * (q0 * q1 + q2 * q3)
     cosr_cosp = 1 - 2 * (q1 * q1 + q2 * q2)
@@ -38,6 +53,61 @@ def load_flight_log(log_path):
     }).sort_values("timestamp")
 
     return pd.merge_asof(position_df, attitude_df, on="timestamp", direction="nearest")
+
+
+def map_nav_state(nav_state):
+    """Map a Series of PX4 nav_state ints to our mode labels, None where ambiguous/unmapped."""
+    return nav_state.map(NAV_STATE_TO_MODE)
+
+
+def load_ground_truth(log_path):
+    """Load PX4's own nav_state ground truth from a log, mapped to our labels.
+
+    Returns a (timestamp, ground_truth_mode) DataFrame, or None if the log has
+    no vehicle_status topic, or if none of its nav_states map to our labels
+    (e.g. a bench test that never leaves MANUAL).
+    """
+    log = ULog(log_path)
+    if "vehicle_status" not in [d.name for d in log.data_list]:
+        return None
+
+    status = log.get_dataset("vehicle_status")
+    ground_truth_df = pd.DataFrame({
+        "timestamp": status.data["timestamp"],
+        "ground_truth_mode": map_nav_state(pd.Series(status.data["nav_state"])),
+    }).sort_values("timestamp")
+
+    if ground_truth_df["ground_truth_mode"].isna().all():
+        return None
+    return ground_truth_df
+
+
+def attach_ground_truth(data, ground_truth_df):
+    """Align a (timestamp, ground_truth_mode) frame onto `data` by nearest timestamp."""
+    return pd.merge_asof(data, ground_truth_df, on="timestamp", direction="nearest")
+
+
+def evaluate_predictions(data_with_gt, result):
+    """Compare predictions to PX4's own nav_state ground truth, where available.
+
+    Only windows landing on an unambiguously-mapped nav_state count towards
+    accuracy - `coverage` reports how much of the flight that was.
+    """
+    if "ground_truth_mode" not in data_with_gt.columns:
+        return None
+
+    ground_truth = data_with_gt["ground_truth_mode"].to_numpy()[result["window_end_idx"]]
+    covered = ~pd.isna(ground_truth)
+    if not covered.any():
+        return None
+
+    predicted = np.array(result["predicted_labels"])
+    accuracy = (predicted[covered] == ground_truth[covered]).mean()
+    return {
+        "accuracy": accuracy,
+        "coverage": covered.mean(),
+        "n_evaluated": int(covered.sum()),
+    }
 
 
 def load_artifacts():

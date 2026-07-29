@@ -134,11 +134,15 @@ architectures = {
         keras.layers.Conv1D(32, kernel_size=3, activation="relu", padding="causal"),
         keras.layers.GlobalAveragePooling1D(),
     ],
+    "BiLSTM": [keras.layers.Bidirectional(keras.layers.LSTM(32))],
 }
+
+def early_stopping():
+    return keras.callbacks.EarlyStopping(monitor="val_accuracy", patience=3, restore_best_weights=True)
 
 print("\n=== Cross-Validation (flight-level, 5-fold) ===")
 N_CV_FOLDS = 5
-CV_EPOCHS = 12
+CV_EPOCHS = 30
 flight_ids = data["flight_id"].unique()
 kfold = KFold(n_splits=N_CV_FOLDS, shuffle=True, random_state=42)
 
@@ -164,7 +168,11 @@ for fold_idx, (train_pos, val_pos) in enumerate(kfold.split(flight_ids), start=1
     for name, feature_layers in architectures.items():
         fold_model = build_model(feature_layers)
         fold_model.compile(optimizer="adam", loss="sparse_categorical_crossentropy", metrics=["accuracy"])
-        fold_model.fit(X_fold_train_scaled, y_fold_train, epochs=CV_EPOCHS, batch_size=32, class_weight=fold_class_weight_dict, verbose=0)
+        fold_model.fit(
+            X_fold_train_scaled, y_fold_train, epochs=CV_EPOCHS, batch_size=32,
+            class_weight=fold_class_weight_dict, validation_data=(X_fold_val_scaled, y_fold_val),
+            callbacks=[early_stopping()], verbose=0,
+        )
         _, fold_accuracy = fold_model.evaluate(X_fold_val_scaled, y_fold_val, verbose=0)
         cv_scores[name].append(fold_accuracy)
         print(f"  Fold {fold_idx} {name}: {fold_accuracy * 100:.2f}%")
@@ -182,7 +190,10 @@ for name, feature_layers in architectures.items():
     print(f"\nTraining {name} model...")
     model = build_model(feature_layers)
     model.compile(optimizer="adam", loss="sparse_categorical_crossentropy", metrics=["accuracy"])
-    model.fit(X_train_scaled, y_train, validation_split=0.15, epochs=20, batch_size=32, class_weight=class_weight_dict, verbose=2)
+    model.fit(
+        X_train_scaled, y_train, validation_split=0.15, epochs=40, batch_size=32,
+        class_weight=class_weight_dict, callbacks=[early_stopping()], verbose=2,
+    )
 
     test_loss, test_accuracy = model.evaluate(X_test_scaled, y_test, verbose=0)
     predictions = np.argmax(model.predict(X_test_scaled, verbose=0), axis=1)

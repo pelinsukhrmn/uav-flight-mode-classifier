@@ -6,3 +6,4 @@ pyulog
 joblib
 matplotlib
 streamlit
+pytest

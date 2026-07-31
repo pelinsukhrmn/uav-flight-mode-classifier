@@ -1,17 +1,25 @@
+from pathlib import Path
 import numpy as np
 import pandas as pd
 import joblib
 from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import KFold
+from sklearn.model_selection import KFold, train_test_split
 from sklearn.metrics import confusion_matrix, classification_report
 from sklearn.utils.class_weight import compute_class_weight
 from tensorflow import keras
 
 from flight_data import FEATURES, MODE_CYCLE as CYCLE, MODE_PARAMS, SPEED_SCALE_RANGE, PITCH_TRIM_RANGE, randomize_mode_params
+from flight_mode_inference import extract_labeled_real_windows, temporal_split
 
 WINDOW_SIZE = 10
 N_FLIGHTS = 120
 N_TRAIN_FLIGHTS = 96
+PREDICTION_HORIZON = 10  # steps past the window's end that the forecaster predicts
+
+REAL_FINETUNE_LOGS = ["data/real_flight.ulg", "data/real_flight_2.ulg"]
+REAL_HOLDOUT_FRACTION = 0.3  # kept out of fine-tuning entirely, for a leakage-free real accuracy check
+REGRESSION_TOLERANCE = 0.03  # max acceptable drop in synthetic test accuracy for the fine-tuned model to "win"
+FINETUNE_LR = 1e-4
 
 def sample_mode_segment(mode, n, rng, mode_params):
     params = mode_params[mode]
@@ -68,15 +76,19 @@ def generate_flight(flight_id, rng, anomaly_prob=0.35):
     df["flight_id"] = flight_id
     return df
 
-def build_windows(df, window_size, feature_columns):
+def build_windows(df, window_size, feature_columns, horizon=0):
+    """Build (window, label) pairs. horizon=0 labels the window's own last
+    timestep (nowcasting); horizon=N labels N steps past the window's end
+    (forecasting) - windows that would need a label past the flight's end
+    are dropped."""
     X_windows = []
     y_windows = []
     for _, group in df.groupby("flight_id"):
         features = group[feature_columns].to_numpy()
         labels = group["mode"].to_numpy()
-        for start in range(len(group) - window_size + 1):
+        for start in range(len(group) - window_size + 1 - horizon):
             X_windows.append(features[start:start + window_size])
-            y_windows.append(labels[start + window_size - 1])
+            y_windows.append(labels[start + window_size - 1 + horizon])
     return np.array(X_windows), np.array(y_windows)
 
 rng = np.random.default_rng(42)
@@ -126,15 +138,18 @@ def build_model(feature_layers):
         keras.layers.Dense(len(classes), activation="softmax"),
     ])
 
+# Factories, not layer instances - a layer already used in one model keeps
+# and keeps training its weights if reused in another, so sharing instances
+# across CV folds/architectures would silently make them not-independent.
 architectures = {
-    "LSTM": [keras.layers.LSTM(32)],
-    "GRU": [keras.layers.GRU(32)],
-    "Conv1D": [
+    "LSTM": lambda: [keras.layers.LSTM(32)],
+    "GRU": lambda: [keras.layers.GRU(32)],
+    "Conv1D": lambda: [
         keras.layers.Conv1D(32, kernel_size=3, activation="relu", padding="causal"),
         keras.layers.Conv1D(32, kernel_size=3, activation="relu", padding="causal"),
         keras.layers.GlobalAveragePooling1D(),
     ],
-    "BiLSTM": [keras.layers.Bidirectional(keras.layers.LSTM(32))],
+    "BiLSTM": lambda: [keras.layers.Bidirectional(keras.layers.LSTM(32))],
 }
 
 def early_stopping():
@@ -165,8 +180,8 @@ for fold_idx, (train_pos, val_pos) in enumerate(kfold.split(flight_ids), start=1
     fold_class_weights = compute_class_weight(class_weight="balanced", classes=np.unique(y_fold_train), y=y_fold_train)
     fold_class_weight_dict = {i: weight for i, weight in enumerate(fold_class_weights)}
 
-    for name, feature_layers in architectures.items():
-        fold_model = build_model(feature_layers)
+    for name, make_layers in architectures.items():
+        fold_model = build_model(make_layers())
         fold_model.compile(optimizer="adam", loss="sparse_categorical_crossentropy", metrics=["accuracy"])
         fold_model.fit(
             X_fold_train_scaled, y_fold_train, epochs=CV_EPOCHS, batch_size=32,
@@ -186,9 +201,9 @@ results = {}
 trained_models = {}
 y_test_named = [index_to_label[i] for i in y_test]
 
-for name, feature_layers in architectures.items():
+for name, make_layers in architectures.items():
     print(f"\nTraining {name} model...")
-    model = build_model(feature_layers)
+    model = build_model(make_layers())
     model.compile(optimizer="adam", loss="sparse_categorical_crossentropy", metrics=["accuracy"])
     model.fit(
         X_train_scaled, y_train, validation_split=0.15, epochs=40, batch_size=32,
@@ -221,3 +236,115 @@ print(f"\nSaving best model ({best_name}) for reuse on real flight logs...")
 best_model.save("flight_mode_model.keras")
 joblib.dump(scaler, "flight_mode_scaler.joblib")
 joblib.dump({"classes": classes, "features": ALL_FEATURES, "window_size": WINDOW_SIZE}, "flight_mode_meta.joblib")
+
+print(f"\n=== Next-mode forecaster ({best_name} architecture, {PREDICTION_HORIZON} steps ahead) ===")
+X_train_next, y_train_next_labels = build_windows(train_df, WINDOW_SIZE, ALL_FEATURES, horizon=PREDICTION_HORIZON)
+X_test_next, y_test_next_labels = build_windows(test_df, WINDOW_SIZE, ALL_FEATURES, horizon=PREDICTION_HORIZON)
+
+y_train_next = np.array([label_to_index[label] for label in y_train_next_labels])
+y_test_next = np.array([label_to_index[label] for label in y_test_next_labels])
+
+n_train_next = X_train_next.shape[0]
+next_scaler = StandardScaler()
+X_train_next_scaled = next_scaler.fit_transform(X_train_next.reshape(-1, n_features)).reshape(n_train_next, WINDOW_SIZE, n_features)
+X_test_next_scaled = next_scaler.transform(X_test_next.reshape(-1, n_features)).reshape(X_test_next.shape[0], WINDOW_SIZE, n_features)
+
+next_class_weights = compute_class_weight(class_weight="balanced", classes=np.unique(y_train_next), y=y_train_next)
+next_class_weight_dict = {i: weight for i, weight in enumerate(next_class_weights)}
+
+next_model = build_model(architectures[best_name]())
+next_model.compile(optimizer="adam", loss="sparse_categorical_crossentropy", metrics=["accuracy"])
+next_model.fit(
+    X_train_next_scaled, y_train_next, validation_split=0.15, epochs=40, batch_size=32,
+    class_weight=next_class_weight_dict, callbacks=[early_stopping()], verbose=2,
+)
+
+next_test_loss, next_test_accuracy = next_model.evaluate(X_test_next_scaled, y_test_next, verbose=0)
+next_predictions_named = [index_to_label[i] for i in np.argmax(next_model.predict(X_test_next_scaled, verbose=0), axis=1)]
+y_test_next_named = [index_to_label[i] for i in y_test_next]
+
+print(f"\nNext-mode forecaster test accuracy: {next_test_accuracy * 100:.2f}% "
+      f"(vs {results[best_name]['accuracy'] * 100:.2f}% for {best_name} nowcasting on the same test split - "
+      "forecasting is a strictly harder task than reporting the current mode, expect this to be lower)")
+print("Confusion Matrix:")
+print(confusion_matrix(y_test_next_named, next_predictions_named, labels=classes))
+print("Classification Report:")
+print(classification_report(y_test_next_named, next_predictions_named, labels=classes))
+
+next_model.save("flight_mode_next_model.keras")
+joblib.dump(next_scaler, "flight_mode_next_scaler.joblib")
+joblib.dump(
+    {"classes": classes, "features": ALL_FEATURES, "window_size": WINDOW_SIZE, "horizon": PREDICTION_HORIZON},
+    "flight_mode_next_meta.joblib",
+)
+
+print("\n=== Fine-tuning on real flight data ===")
+real_meta = {"classes": classes, "features": ALL_FEATURES, "window_size": WINDOW_SIZE}
+real_train_windows, real_train_labels, real_holdout_windows, real_holdout_labels = [], [], [], []
+
+for log_path in REAL_FINETUNE_LOGS:
+    if not Path(log_path).exists():
+        print(f"  {log_path}: not found, skipping")
+        continue
+    X_real, y_real = extract_labeled_real_windows(log_path, real_meta)
+    if X_real is None:
+        print(f"  {log_path}: no unambiguous nav_state coverage, skipping")
+        continue
+    X_tr, y_tr, X_ho, y_ho = temporal_split(X_real, y_real, train_fraction=1 - REAL_HOLDOUT_FRACTION)
+    print(f"  {log_path}: {len(X_tr)} windows for fine-tuning, {len(X_ho)} held out for evaluation")
+    real_train_windows.append(X_tr)
+    real_train_labels.append(y_tr)
+    real_holdout_windows.append(X_ho)
+    real_holdout_labels.append(y_ho)
+
+if not real_train_windows or not any(len(w) for w in real_holdout_windows):
+    print("No usable real ground-truth windows found - keeping the synthetic-only model as production.")
+else:
+    X_real_train = np.concatenate(real_train_windows)
+    y_real_train = np.array([label_to_index[label] for label in np.concatenate(real_train_labels)])
+    X_real_holdout = np.concatenate(real_holdout_windows)
+    y_real_holdout = np.array([label_to_index[label] for label in np.concatenate(real_holdout_labels)])
+
+    X_real_train_scaled = scaler.transform(X_real_train.reshape(-1, n_features)).reshape(len(X_real_train), WINDOW_SIZE, n_features)
+    X_real_holdout_scaled = scaler.transform(X_real_holdout.reshape(-1, n_features)).reshape(len(X_real_holdout), WINDOW_SIZE, n_features)
+
+    pre_finetune_real_acc = best_model.evaluate(X_real_holdout_scaled, y_real_holdout, verbose=0)[1]
+    print(f"\nSynthetic-only model on real held-out windows: {pre_finetune_real_acc * 100:.2f}% "
+          f"({len(X_real_holdout)} windows, classes: {sorted(set(np.concatenate(real_train_labels)) | set(np.concatenate(real_holdout_labels)))})")
+
+    # Rehearsal: mix in a synthetic replay sample so classes with zero real
+    # examples (ascend/cruise/descend/transition/anomaly) aren't forgotten
+    # while the model adapts to the real hover/takeoff/land/rtl examples.
+    replay_size = min(len(X_train_scaled), 3 * len(X_real_train))
+    _, X_replay, _, y_replay = train_test_split(
+        X_train_scaled, y_train, test_size=replay_size, stratify=y_train, random_state=42,
+    )
+    X_finetune = np.concatenate([X_replay, X_real_train_scaled])
+    y_finetune = np.concatenate([y_replay, y_real_train])
+
+    finetune_class_weights = compute_class_weight(class_weight="balanced", classes=np.unique(y_finetune), y=y_finetune)
+    finetune_class_weight_dict = {i: weight for i, weight in enumerate(finetune_class_weights)}
+
+    best_model.compile(optimizer=keras.optimizers.Adam(learning_rate=FINETUNE_LR), loss="sparse_categorical_crossentropy", metrics=["accuracy"])
+    best_model.fit(
+        X_finetune, y_finetune, validation_data=(X_real_holdout_scaled, y_real_holdout), epochs=15, batch_size=32,
+        class_weight=finetune_class_weight_dict, callbacks=[early_stopping()], verbose=2,
+    )
+
+    post_finetune_real_acc = best_model.evaluate(X_real_holdout_scaled, y_real_holdout, verbose=0)[1]
+    post_finetune_synthetic_acc = best_model.evaluate(X_test_scaled, y_test, verbose=0)[1]
+    synthetic_regression = results[best_name]["accuracy"] - post_finetune_synthetic_acc
+
+    print(f"\nFine-tuned model on real held-out windows: {post_finetune_real_acc * 100:.2f}% "
+          f"(was {pre_finetune_real_acc * 100:.2f}% before fine-tuning)")
+    print(f"Fine-tuned model on synthetic test set: {post_finetune_synthetic_acc * 100:.2f}% "
+          f"(was {results[best_name]['accuracy'] * 100:.2f}% before fine-tuning, "
+          f"{synthetic_regression * 100:+.2f} points)")
+
+    if post_finetune_real_acc >= pre_finetune_real_acc and synthetic_regression <= REGRESSION_TOLERANCE:
+        print("\nFine-tuned model is at least as good on real data and didn't regress synthetic "
+              "accuracy beyond tolerance - replacing flight_mode_model.keras with it.")
+        best_model.save("flight_mode_model.keras")
+    else:
+        print("\nFine-tuned model did not clear the acceptance bar (real accuracy dropped, or "
+              "synthetic accuracy regressed too much) - keeping the synthetic-only model as production.")

@@ -87,21 +87,28 @@ def attach_ground_truth(data, ground_truth_df):
     return pd.merge_asof(data, ground_truth_df, on="timestamp", direction="nearest")
 
 
-def evaluate_predictions(data_with_gt, result):
+def evaluate_predictions(data_with_gt, result, horizon=0):
     """Compare predictions to PX4's own nav_state ground truth, where available.
 
     Only windows landing on an unambiguously-mapped nav_state count towards
-    accuracy - `coverage` reports how much of the flight that was.
+    accuracy - `coverage` reports how much of the flight that was. `horizon`
+    shifts the comparison forward by that many samples, for a forecasting
+    model whose prediction for a window is about a point past its end -
+    windows whose shifted index runs past the end of the log are dropped.
     """
     if "ground_truth_mode" not in data_with_gt.columns:
         return None
 
-    ground_truth = data_with_gt["ground_truth_mode"].to_numpy()[result["window_end_idx"]]
+    shifted_idx = result["window_end_idx"] + horizon
+    in_bounds = shifted_idx < len(data_with_gt)
+    shifted_idx = shifted_idx[in_bounds]
+    predicted = np.array(result["predicted_labels"])[in_bounds]
+
+    ground_truth = data_with_gt["ground_truth_mode"].to_numpy()[shifted_idx]
     covered = ~pd.isna(ground_truth)
     if not covered.any():
         return None
 
-    predicted = np.array(result["predicted_labels"])
     accuracy = (predicted[covered] == ground_truth[covered]).mean()
     return {
         "accuracy": accuracy,
@@ -110,10 +117,42 @@ def evaluate_predictions(data_with_gt, result):
     }
 
 
-def load_artifacts():
-    meta = joblib.load("flight_mode_meta.joblib")
-    scaler = joblib.load("flight_mode_scaler.joblib")
-    model = keras.models.load_model("flight_mode_model.keras")
+def extract_labeled_real_windows(log_path, meta):
+    """Real, PX4-nav_state-labeled (window, label) pairs from a log, for fine-tuning.
+
+    Only windows landing on an unambiguously-mapped nav_state are kept (same
+    restriction as evaluate_predictions) - returns (None, None) if the log
+    has no such coverage at all.
+    """
+    data = load_flight_log(log_path)
+    ground_truth_df = load_ground_truth(log_path)
+    if ground_truth_df is None:
+        return None, None
+    data = attach_ground_truth(data, ground_truth_df)
+
+    windows, window_end_idx = build_windows(data, meta)
+    if windows is None:
+        return None, None
+
+    ground_truth = data["ground_truth_mode"].to_numpy()[window_end_idx]
+    covered = ~pd.isna(ground_truth)
+    if not covered.any():
+        return None, None
+    return windows[covered], ground_truth[covered]
+
+
+def temporal_split(X, y, train_fraction=0.7):
+    """Split (already-chronological) windows into an early train slice and a
+    later holdout slice, so a holdout accuracy can't leak from overlapping
+    windows the way a random shuffle-split would."""
+    split = int(len(X) * train_fraction)
+    return X[:split], y[:split], X[split:], y[split:]
+
+
+def load_artifacts(prefix="flight_mode"):
+    meta = joblib.load(f"{prefix}_meta.joblib")
+    scaler = joblib.load(f"{prefix}_scaler.joblib")
+    model = keras.models.load_model(f"{prefix}_model.keras")
     return meta, scaler, model
 
 

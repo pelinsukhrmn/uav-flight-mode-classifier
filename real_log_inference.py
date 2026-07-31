@@ -44,6 +44,26 @@ else:
     print("\nNo PX4 nav_state ground truth available for this log (no vehicle_status topic, "
           "or none of its nav_states map to our labels).")
 
+NEXT_ARTIFACT_FILES = ["flight_mode_next_model.keras", "flight_mode_next_scaler.joblib", "flight_mode_next_meta.joblib"]
+if all(Path(f).exists() for f in NEXT_ARTIFACT_FILES):
+    next_meta, next_scaler, next_model = load_artifacts("flight_mode_next")
+    next_result = predict(data, next_meta, next_scaler, next_model)
+    if next_result is not None:
+        horizon = next_meta["horizon"]
+        avg_dt = duration_seconds / max(len(data) - 1, 1)
+        print(f"\n=== Next-mode forecast (~{horizon} steps, ~{horizon * avg_dt:.1f}s ahead) ===")
+        print(pd.Series(next_result["predicted_labels"]).value_counts())
+        print(f"Mean forecast confidence: {next_result['confidences'].mean():.3f}")
+
+        next_evaluation = evaluate_predictions(data, next_result, horizon=horizon) if ground_truth_df is not None else None
+        if next_evaluation is not None:
+            print(f"Next-mode ground-truth accuracy: {next_evaluation['accuracy'] * 100:.1f}% "
+                  f"({next_evaluation['coverage'] * 100:.1f}% coverage, {next_evaluation['n_evaluated']} windows)")
+        else:
+            print("No ground truth available to check the forecast against.")
+else:
+    print("\nNo next-mode forecaster found (run flight_sequence_classifier.py to train one).")
+
 segments = summarize_segments(result["window_times"], predicted_labels, confidences)
 
 print("\nPredicted segments:")

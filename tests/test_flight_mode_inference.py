@@ -2,9 +2,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import flight_mode_inference as fmi
 from flight_mode_inference import (
     quaternion_to_roll_pitch, map_nav_state, attach_ground_truth, evaluate_predictions,
-    build_windows, summarize_segments,
+    build_windows, summarize_segments, temporal_split,
 )
 
 
@@ -70,6 +71,64 @@ def test_build_windows_returns_none_when_too_few_rows():
     windows, window_end_idx = build_windows(data, meta)
     assert windows is None
     assert window_end_idx is None
+
+
+def test_evaluate_predictions_with_horizon_shifts_ground_truth_forward():
+    data = pd.DataFrame({
+        "timestamp": [0, 1, 2, 3, 4, 5],
+        "ground_truth_mode": ["hover", "hover", "hover", "rtl", "rtl", "rtl"],
+    })
+    result = {
+        "window_end_idx": np.array([0, 1, 2]),
+        "predicted_labels": ["hover", "rtl", "rtl"],  # forecasts for indices 3, 4, 5
+    }
+
+    evaluation = evaluate_predictions(data, result, horizon=3)
+
+    assert evaluation["n_evaluated"] == 3
+    assert evaluation["accuracy"] == pytest.approx(2 / 3)  # index 0's forecast ("hover") was wrong
+
+
+def test_evaluate_predictions_with_horizon_drops_out_of_bounds_windows():
+    data = pd.DataFrame({
+        "timestamp": [0, 1, 2, 3],
+        "ground_truth_mode": ["hover", "hover", "rtl", "rtl"],
+    })
+    result = {
+        "window_end_idx": np.array([0, 1, 2, 3]),
+        "predicted_labels": ["hover", "hover", "hover", "hover"],
+    }
+
+    # horizon=2 shifts indices to [2, 3, 4, 5] - the last two run past the end (len=4) and are dropped
+    evaluation = evaluate_predictions(data, result, horizon=2)
+
+    assert evaluation["n_evaluated"] == 2
+    assert evaluation["accuracy"] == pytest.approx(0.0)  # both remaining forecasts ("hover") missed the actual "rtl"
+
+
+def test_temporal_split_keeps_chronological_order():
+    X = np.arange(10).reshape(10, 1, 1)
+    y = np.array([str(i) for i in range(10)])
+
+    X_train, y_train, X_holdout, y_holdout = temporal_split(X, y, train_fraction=0.7)
+
+    assert len(X_train) == 7 and len(X_holdout) == 3
+    assert list(y_train) == [str(i) for i in range(7)]
+    assert list(y_holdout) == [str(i) for i in range(7, 10)]
+
+
+def test_load_artifacts_uses_prefix_for_filenames(monkeypatch):
+    calls = []
+    monkeypatch.setattr(fmi.joblib, "load", lambda path: calls.append(("joblib", path)))
+    monkeypatch.setattr(fmi.keras.models, "load_model", lambda path: calls.append(("keras", path)))
+
+    fmi.load_artifacts(prefix="flight_mode_next")
+
+    assert calls == [
+        ("joblib", "flight_mode_next_meta.joblib"),
+        ("joblib", "flight_mode_next_scaler.joblib"),
+        ("keras", "flight_mode_next_model.keras"),
+    ]
 
 
 def test_summarize_segments_groups_consecutive_equal_labels():

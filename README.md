@@ -4,6 +4,12 @@ Models that predict a UAV's flight mode from sensor readings (vertical speed, ho
 
 Live demo: https://pelinsukhrmn-uav-flight-mode-classifier-app-u3jseo.streamlit.app
 
+## Setup
+
+```bash
+pip install -r requirements.txt
+```
+
 ## flight_data.py
 
 Shared constants used by both classifiers: `FEATURES`, `MODE_CYCLE`, and `MODE_PARAMS` (the per-mode sensor mean/std used to generate synthetic data).
@@ -171,9 +177,3 @@ pytest
 ## Future work
 
 The real-data fine-tuning set is currently small (~979 ground-truth-labeled windows from 2 logs, covering only 4 of 9 modes). [PX4's public Flight Review database](https://review.px4.io) hosts real, publicly-shared PX4 `.ulg` logs (with full `vehicle_status`/`nav_state` telemetry) from many users and vehicles — pulling in additional logs from there, especially ones with `AUTO_MISSION`/`POSCTL`/`ACRO`/`STAB` coverage, is the most direct way to grow both the fine-tuning set and its class diversity without needing new hardware. PX4 SITL (Gazebo/jMAVSim) is a hardware-free alternative for generating additional real-PX4-state-machine logs locally.
-
-## Setup
-
-```bash
-pip install -r requirements.txt
-```

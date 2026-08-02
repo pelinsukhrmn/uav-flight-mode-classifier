@@ -25,6 +25,10 @@ BUNDLED_LOGS = {
     "Real flight 3 (VTOL, mostly manual)": "data/real_flight_3_vtol.ulg",
     "Real flight 4 (position hold, manual)": "data/real_flight_4_poshold.ulg",
     "Real flight 5 (stabilized, manual)": "data/real_flight_5_stab.ulg",
+    "Real flight 6 (public log, takeoff/land/hover)": "data/real_flight_6_takeoff_land.ulg",
+    "Real flight 7 (public log, takeoff/land)": "data/real_flight_7_takeoff_land.ulg",
+    "Real flight 8 (public log, hover/rtl)": "data/real_flight_8_hover_rtl.ulg",
+    "Real flight 9 (public log, hover/land)": "data/real_flight_9_hover_land.ulg",
 }
 BUNDLED_LOGS = {label: path for label, path in BUNDLED_LOGS.items() if Path(path).exists()}
 

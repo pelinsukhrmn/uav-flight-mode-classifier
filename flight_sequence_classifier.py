@@ -16,7 +16,11 @@ N_FLIGHTS = 120
 N_TRAIN_FLIGHTS = 96
 PREDICTION_HORIZON = 10  # steps past the window's end that the forecaster predicts
 
-REAL_FINETUNE_LOGS = ["data/real_flight.ulg", "data/real_flight_2.ulg"]
+REAL_FINETUNE_LOGS = [
+    "data/real_flight.ulg", "data/real_flight_2.ulg",
+    "data/real_flight_6_takeoff_land.ulg", "data/real_flight_7_takeoff_land.ulg",
+    "data/real_flight_8_hover_rtl.ulg", "data/real_flight_9_hover_land.ulg",
+]
 REAL_HOLDOUT_FRACTION = 0.3  # kept out of fine-tuning entirely, for a leakage-free real accuracy check
 REGRESSION_TOLERANCE = 0.03  # max acceptable drop in synthetic test accuracy for the fine-tuned model to "win"
 FINETUNE_LR = 1e-4
@@ -316,9 +320,15 @@ else:
     # examples (ascend/cruise/descend/transition/anomaly) aren't forgotten
     # while the model adapts to the real hover/takeoff/land/rtl examples.
     replay_size = min(len(X_train_scaled), 3 * len(X_real_train))
-    _, X_replay, _, y_replay = train_test_split(
-        X_train_scaled, y_train, test_size=replay_size, stratify=y_train, random_state=42,
-    )
+    if replay_size >= len(X_train_scaled):
+        # Real dataset is large enough that the 3x cap doesn't bind - use the whole
+        # synthetic training set as-is rather than asking train_test_split for a
+        # "subsample" the size of the entire array (test_size must be < n_samples).
+        X_replay, y_replay = X_train_scaled, y_train
+    else:
+        _, X_replay, _, y_replay = train_test_split(
+            X_train_scaled, y_train, test_size=replay_size, stratify=y_train, random_state=42,
+        )
     X_finetune = np.concatenate([X_replay, X_real_train_scaled])
     y_finetune = np.concatenate([y_replay, y_real_train])
 

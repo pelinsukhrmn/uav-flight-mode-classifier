@@ -11,3 +11,7 @@ env/
 Thumbs.db
 *_flight_mode_timeline.png
 .ulg/
+cpp/*.exe
+cpp/*.o
+cpp/parity_data.txt
+cpp/replay_data.csv

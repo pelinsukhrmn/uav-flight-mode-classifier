@@ -7,3 +7,4 @@ joblib
 matplotlib
 streamlit
 pytest
+pymavlink  # optional - only needed for live_inference.py --mode mavlink

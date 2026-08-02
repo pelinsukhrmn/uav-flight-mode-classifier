@@ -237,9 +237,9 @@ best_name = max(results, key=lambda name: results[name]["accuracy"])
 best_model = trained_models[best_name]
 
 print(f"\nSaving best model ({best_name}) for reuse on real flight logs...")
-best_model.save("flight_mode_model.keras")
-joblib.dump(scaler, "flight_mode_scaler.joblib")
-joblib.dump({"classes": classes, "features": ALL_FEATURES, "window_size": WINDOW_SIZE}, "flight_mode_meta.joblib")
+best_model.save("models/flight_mode_model.keras")
+joblib.dump(scaler, "models/flight_mode_scaler.joblib")
+joblib.dump({"classes": classes, "features": ALL_FEATURES, "window_size": WINDOW_SIZE}, "models/flight_mode_meta.joblib")
 
 print(f"\n=== Next-mode forecaster ({best_name} architecture, {PREDICTION_HORIZON} steps ahead) ===")
 X_train_next, y_train_next_labels = build_windows(train_df, WINDOW_SIZE, ALL_FEATURES, horizon=PREDICTION_HORIZON)
@@ -275,11 +275,11 @@ print(confusion_matrix(y_test_next_named, next_predictions_named, labels=classes
 print("Classification Report:")
 print(classification_report(y_test_next_named, next_predictions_named, labels=classes))
 
-next_model.save("flight_mode_next_model.keras")
-joblib.dump(next_scaler, "flight_mode_next_scaler.joblib")
+next_model.save("models/flight_mode_next_model.keras")
+joblib.dump(next_scaler, "models/flight_mode_next_scaler.joblib")
 joblib.dump(
     {"classes": classes, "features": ALL_FEATURES, "window_size": WINDOW_SIZE, "horizon": PREDICTION_HORIZON},
-    "flight_mode_next_meta.joblib",
+    "models/flight_mode_next_meta.joblib",
 )
 
 print("\n=== Fine-tuning on real flight data ===")
@@ -354,7 +354,7 @@ else:
     if post_finetune_real_acc >= pre_finetune_real_acc and synthetic_regression <= REGRESSION_TOLERANCE:
         print("\nFine-tuned model is at least as good on real data and didn't regress synthetic "
               "accuracy beyond tolerance - replacing flight_mode_model.keras with it.")
-        best_model.save("flight_mode_model.keras")
+        best_model.save("models/flight_mode_model.keras")
     else:
         print("\nFine-tuned model did not clear the acceptance bar (real accuracy dropped, or "
               "synthetic accuracy regressed too much) - keeping the synthetic-only model as production.")

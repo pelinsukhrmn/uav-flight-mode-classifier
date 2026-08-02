@@ -33,7 +33,7 @@ Test accuracy is around 77% (down from 84% before the pitch-trim randomization a
 Run:
 
 ```bash
-python flight_mode_classifier.py
+python src/flight_mode_classifier.py
 ```
 
 ## flight_sequence_classifier.py
@@ -56,19 +56,19 @@ LSTM edging out BiLSTM here (85.08% vs 84.90%, 0.18 points) despite BiLSTM havin
 
 Whichever architecture wins is then fine-tuned on real data (see [Real-data fine-tuning](#real-data-fine-tuning) below) before being saved as the production model — see the updated ground-truth results.
 
-Running this script also saves the best-performing model (`flight_mode_model.keras`, possibly the fine-tuned version — see below), its feature scaler (`flight_mode_scaler.joblib`), and metadata (`flight_mode_meta.joblib`) to disk for reuse, plus a second forecasting model (see [Next-mode forecasting](#next-mode-forecasting) below).
+Running this script also saves the best-performing model (`models/flight_mode_model.keras`, possibly the fine-tuned version — see below), its feature scaler (`models/flight_mode_scaler.joblib`), and metadata (`models/flight_mode_meta.joblib`) to disk for reuse, plus a second forecasting model (see [Next-mode forecasting](#next-mode-forecasting) below).
 
 Run:
 
 ```bash
-python flight_sequence_classifier.py
+python src/flight_sequence_classifier.py
 ```
 
 ### Next-mode forecasting
 
 Besides predicting the *current* flight mode, this script also trains a second model that forecasts the mode `PREDICTION_HORIZON = 10` timesteps ahead (about 1-2 seconds, depending on the log's sample rate), using the exact same 10-step sliding window as input — only the label changes, from `start + window_size - 1` (current mode) to `start + window_size - 1 + horizon` (mode 10 steps later). It reuses whichever architecture won the final test-set comparison above (currently LSTM — see the note on CV-vs-final-test ranking noise there) rather than repeating the full 4-way comparison for a second task.
 
-- Saved artifacts: `flight_mode_next_model.keras`, `flight_mode_next_scaler.joblib`, `flight_mode_next_meta.joblib` (metadata includes `horizon`).
+- Saved artifacts: `models/flight_mode_next_model.keras`, `models/flight_mode_next_scaler.joblib`, `models/flight_mode_next_meta.joblib` (metadata includes `horizon`).
 - Test accuracy: **56.74%**, vs 85.08% for nowcasting the current mode on the same split. This gap is expected and reported honestly rather than hidden — forecasting ahead is a strictly harder problem than reporting what's already visible in the window, especially near mode transitions. Notably, `transition` itself gets ~0% recall in the forecaster: by the time a transition is 10 steps from completing, the model tends to already commit to whichever mode is arriving next rather than predicting "transition," since that label describes *now*, not 10 steps from now.
 - `real_log_inference.py` and `app.py` both run this second model too, reporting a forecasted next mode/confidence and, where ground truth exists that far ahead, a horizon-shifted ground-truth accuracy via `evaluate_predictions(..., horizon=...)`.
 
@@ -96,7 +96,7 @@ Ground-truth-labeled real windows are no longer just an evaluation set — the C
 - Each log's ground-truth-covered windows are split **temporally** 70/30 (chronological, not shuffled — avoids near-duplicate overlapping windows leaking across the split): first 70% → fine-tune-train, last 30% → held out for evaluation.
 - Fine-tuning batch = real fine-tune-train windows + a random stratified "replay" subsample of the original synthetic training set (up to 3x the real count) mixed in. This rehearsal keeps the 5 classes with zero real ground-truth coverage (`ascend`/`cruise`/`descend`/`transition`/`anomaly`) from being forgotten while the model adapts to the 4 real-covered classes (`hover`/`takeoff`/`land`/`rtl`).
 - Low learning rate (`1e-4`), at most 15 epochs, `EarlyStopping` monitoring accuracy on the real held-out split.
-- **Acceptance test**: the fine-tuned model only replaces `flight_mode_model.keras` if it (a) matches or beats the pre-fine-tune model on the real held-out set, and (b) doesn't regress synthetic test accuracy by more than 3 points. Otherwise the synthetic-only model is kept, and the script says so explicitly on the console — a claim of "improved with real data" is never made without a measured result behind it.
+- **Acceptance test**: the fine-tuned model only replaces `models/flight_mode_model.keras` if it (a) matches or beats the pre-fine-tune model on the real held-out set, and (b) doesn't regress synthetic test accuracy by more than 3 points. Otherwise the synthetic-only model is kept, and the script says so explicitly on the console — a claim of "improved with real data" is never made without a measured result behind it.
 
 Result from the current fine-tuning run (6 logs — `real_flight.ulg`, `real_flight_2.ulg`, and the four public logs from PX4's Flight Review database — 11,802 ground-truth fine-tune-train windows, held-out set covering `hover`/`land`/`rtl`/`takeoff`):
 
@@ -162,25 +162,25 @@ Nine genuine flights are also included:
 - `data/real_flight_5_stab.ulg` — a ~1-minute multirotor flight flown entirely in `STAB` (manual stabilized). Same story as above: no ground-truth coverage, included as another real hand-flown segment.
 - `data/real_flight_6_takeoff_land.ulg` through `data/real_flight_9_hover_land.ulg` — four public quadrotor logs pulled from [PX4's Flight Review database](https://review.px4.io) (`review.px4.io/dbinfo` + the CDN download URL each entry provides), chosen from ~1300 candidates filtered for a "good"/"great" community rating, zero logged errors, and strong `hover`/`takeoff`/`land`/`rtl` ground-truth coverage (76-100% of each flight). Added specifically to grow the real-data fine-tuning set (see below) beyond just 2 source flights, without needing new hardware. Different vehicles/airframes than `real_flight.ulg`/`real_flight_2.ulg`, which is the point — it reduces how much the fine-tuned model is shaped by any one aircraft's quirks.
 
-Requires `flight_sequence_classifier.py` to have been run first (to produce the saved model files).
+Requires `src/flight_sequence_classifier.py` to have been run first (to produce the saved model files).
 
 Run:
 
 ```bash
-python flight_sequence_classifier.py
-python real_log_inference.py data/real_flight.ulg
+python src/flight_sequence_classifier.py
+python src/real_log_inference.py data/real_flight.ulg
 ```
 
 ## app.py
 
 Streamlit UI around the same inference pipeline as `real_log_inference.py`. Upload a `.ulg` file, or pick one of the ten bundled logs (sample bench test, and the nine real flights described above) from the dropdown. Shows flight duration/sample count/mean confidence, a ground-truth accuracy metric when the log has covered `nav_state` segments, the predicted mode distribution, the sensor + mode timeline, and a table of predicted segments with a CSV download button. Also shows a "Next-mode forecast" section (predicted mode ~10 steps ahead, forecast confidence, horizon-shifted ground-truth accuracy when available, and its own segment table/CSV download) when the forecaster artifacts exist.
 
-Requires `flight_sequence_classifier.py` to have been run first (to produce the saved model files).
+Requires `src/flight_sequence_classifier.py` to have been run first (to produce the saved model files).
 
 Run:
 
 ```bash
-streamlit run app.py
+streamlit run src/app.py
 ```
 
 ## live_inference.py
@@ -189,7 +189,7 @@ A streaming prototype for autonomous decision support: instead of loading a whol
 
 Two sources are implemented:
 
-- **`replay_log_source`** — replays a `.ulg` file's real timestamps (or as fast as possible with `--speed 0`). This is the one actually exercised: `python live_inference.py --mode replay --log data/sample.ulg --speed 0 --min-interval 1.0` runs the full pipeline end-to-end against a real log today.
+- **`replay_log_source`** — replays a `.ulg` file's real timestamps (or as fast as possible with `--speed 0`). This is the one actually exercised: `python src/live_inference.py --mode replay --log data/sample.ulg --speed 0 --min-interval 1.0` runs the full pipeline end-to-end against a real log today.
 - **`mavlink_source`** — connects to a live MAVLink stream (SITL or a telemetry radio) via `pymavlink`, reading `ATTITUDE` and `LOCAL_POSITION_NED` messages. Written against the documented message fields but **not exercised in this environment** — no PX4 SITL toolchain or live vehicle available here. Needs `pip install pymavlink` and a running SITL (`udp:127.0.0.1:14540` by default) or radio link before it's been proven, not just written.
 
 `--min-interval` (default 1.0s of flight-time) throttles how often windows actually get scored — MAVLink attitude/position messages can arrive tens of times a second, and each `model.predict()` call costs tens of milliseconds regardless of batch size, so scoring every single incoming sample would fall behind in real time for no benefit (mode changes don't need sub-second resolution).
@@ -197,8 +197,8 @@ Two sources are implemented:
 Run:
 
 ```bash
-python live_inference.py --mode replay --log data/sample.ulg --speed 0
-python live_inference.py --mode mavlink --connection udp:127.0.0.1:14540  # untested here
+python src/live_inference.py --mode replay --log data/sample.ulg --speed 0
+python src/live_inference.py --mode mavlink --connection udp:127.0.0.1:14540  # untested here
 ```
 
 ## cpp/

@@ -44,7 +44,7 @@ else:
     print("\nNo PX4 nav_state ground truth available for this log (no vehicle_status topic, "
           "or none of its nav_states map to our labels).")
 
-NEXT_ARTIFACT_FILES = ["flight_mode_next_model.keras", "flight_mode_next_scaler.joblib", "flight_mode_next_meta.joblib"]
+NEXT_ARTIFACT_FILES = ["models/flight_mode_next_model.keras", "models/flight_mode_next_scaler.joblib", "models/flight_mode_next_meta.joblib"]
 if all(Path(f).exists() for f in NEXT_ARTIFACT_FILES):
     next_meta, next_scaler, next_model = load_artifacts("flight_mode_next")
     next_result = predict(data, next_meta, next_scaler, next_model)
@@ -62,7 +62,7 @@ if all(Path(f).exists() for f in NEXT_ARTIFACT_FILES):
         else:
             print("No ground truth available to check the forecast against.")
 else:
-    print("\nNo next-mode forecaster found (run flight_sequence_classifier.py to train one).")
+    print("\nNo next-mode forecaster found (run src/flight_sequence_classifier.py to train one).")
 
 segments = summarize_segments(result["window_times"], predicted_labels, confidences)
 

@@ -125,9 +125,9 @@ def test_load_artifacts_uses_prefix_for_filenames(monkeypatch):
     fmi.load_artifacts(prefix="flight_mode_next")
 
     assert calls == [
-        ("joblib", "flight_mode_next_meta.joblib"),
-        ("joblib", "flight_mode_next_scaler.joblib"),
-        ("keras", "flight_mode_next_model.keras"),
+        ("joblib", "models/flight_mode_next_meta.joblib"),
+        ("joblib", "models/flight_mode_next_scaler.joblib"),
+        ("keras", "models/flight_mode_next_model.keras"),
     ]
 
 

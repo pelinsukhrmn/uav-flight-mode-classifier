@@ -13,9 +13,9 @@ st.set_page_config(page_title="UAV Flight Mode Classifier", layout="wide")
 st.title("UAV Flight Mode Classifier")
 st.caption("Runs the trained sequence model on a PX4 flight log and shows the predicted mode over time.")
 
-ARTIFACT_FILES = ["flight_mode_model.keras", "flight_mode_scaler.joblib", "flight_mode_meta.joblib"]
+ARTIFACT_FILES = ["models/flight_mode_model.keras", "models/flight_mode_scaler.joblib", "models/flight_mode_meta.joblib"]
 if not all(Path(f).exists() for f in ARTIFACT_FILES):
-    st.error("No trained model found. Run `python flight_sequence_classifier.py` first to train and save one.")
+    st.error("No trained model found. Run `python src/flight_sequence_classifier.py` first to train and save one.")
     st.stop()
 
 BUNDLED_LOGS = {
@@ -97,9 +97,9 @@ st.download_button(
 )
 
 st.subheader("Next-mode forecast")
-NEXT_ARTIFACT_FILES = ["flight_mode_next_model.keras", "flight_mode_next_scaler.joblib", "flight_mode_next_meta.joblib"]
+NEXT_ARTIFACT_FILES = ["models/flight_mode_next_model.keras", "models/flight_mode_next_scaler.joblib", "models/flight_mode_next_meta.joblib"]
 if not all(Path(f).exists() for f in NEXT_ARTIFACT_FILES):
-    st.info("No next-mode forecaster found. Run `python flight_sequence_classifier.py` to train one.")
+    st.info("No next-mode forecaster found. Run `python src/flight_sequence_classifier.py` to train one.")
 else:
     next_meta, next_scaler, next_model = load_artifacts("flight_mode_next")
     next_result = predict(data, next_meta, next_scaler, next_model)

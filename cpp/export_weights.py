@@ -21,9 +21,9 @@ def cpp_array(name, values):
 
 
 def export_model(prefix, cpp_name):
-    meta = joblib.load(f"{prefix}_meta.joblib")
-    scaler = joblib.load(f"{prefix}_scaler.joblib")
-    model = keras.models.load_model(f"{prefix}_model.keras")
+    meta = joblib.load(f"models/{prefix}_meta.joblib")
+    scaler = joblib.load(f"models/{prefix}_scaler.joblib")
+    model = keras.models.load_model(f"models/{prefix}_model.keras")
     kernel, recurrent_kernel, bias, dense1_kernel, dense1_bias, dense2_kernel, dense2_bias = model.get_weights()
 
     units = recurrent_kernel.shape[0]

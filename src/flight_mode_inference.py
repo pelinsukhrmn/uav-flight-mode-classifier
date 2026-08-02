@@ -150,9 +150,9 @@ def temporal_split(X, y, train_fraction=0.7):
 
 
 def load_artifacts(prefix="flight_mode"):
-    meta = joblib.load(f"{prefix}_meta.joblib")
-    scaler = joblib.load(f"{prefix}_scaler.joblib")
-    model = keras.models.load_model(f"{prefix}_model.keras")
+    meta = joblib.load(f"models/{prefix}_meta.joblib")
+    scaler = joblib.load(f"models/{prefix}_scaler.joblib")
+    model = keras.models.load_model(f"models/{prefix}_model.keras")
     return meta, scaler, model
 
 

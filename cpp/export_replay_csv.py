@@ -7,7 +7,7 @@ Usage: python cpp/export_replay_csv.py data/sample.ulg
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 import os
 os.chdir(Path(__file__).resolve().parent.parent)
 

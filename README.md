@@ -211,6 +211,8 @@ A dependency-free C++ port of the inference path, for the latency-sensitive half
 - **`export_replay_csv.py`** + **`main_replay.cpp`** — the C++ equivalent of `live_inference.py --mode replay`: streams a log's raw rows from a CSV, buffers a rolling window, scores both models, prints the same advisory-only lines. Measured (`real_flight_2.ulg`, 2255 windows scored, no throttling): full run in 16ms of CPU time for both models combined — roughly **3-4 microseconds per inference**, against Python/Keras' tens-of-milliseconds-per-call overhead measured earlier. This is the actual payoff of porting the inference path: real headroom for a genuine control-loop rate, not just a marginal speedup.
 - No MAVLink ingestion in C++ (unlike the Python prototype, which at least has an untested `mavlink_source`) — vendoring the MAVLink C headers and standing up a SITL connection just to leave it untested wasn't worth it here. Wiring a real MAVLink source in later is just one more row-producer with the same interface as `export_replay_csv.py`'s output, once there's an actual connection to test it against.
 
+`weights_current_mode.h`/`weights_next_mode.h` are generated, committed output — they can silently drift from the actual `.keras` models if someone retrains and forgets to rerun `export_weights.py`. The `cpp-parity` job in `.github/workflows/tests.yml` catches this on every push/PR: it regenerates the headers and fails the build (`git diff --exit-code`) if the committed version doesn't match, then separately builds the C++ engine and reruns the real parity check against the live models - so both "forgot to re-export" and "the forward pass itself is wrong" are covered, not just one or the other.
+
 Build and run (MinGW g++, no other dependencies):
 
 ```bash

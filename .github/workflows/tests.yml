@@ -14,3 +14,25 @@ jobs:
           python-version: "3.11"
       - run: pip install -r requirements.txt
       - run: pytest
+
+  cpp-parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: Check committed cpp/weights_*.h match the committed models
+        run: |
+          python cpp/export_weights.py
+          git diff --exit-code -- cpp/weights_current_mode.h cpp/weights_next_mode.h || {
+            echo "::error::cpp/weights_*.h is stale - run 'python cpp/export_weights.py' and commit the result.";
+            exit 1;
+          }
+      - name: Build the C++ inference engine
+        run: g++ -std=c++17 -O2 -o cpp/parity_check.exe cpp/parity_check.cpp
+      - name: Verify numerical parity against the real Keras models
+        run: |
+          python cpp/verify_parity.py
+          ./cpp/parity_check.exe

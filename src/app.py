@@ -29,6 +29,8 @@ BUNDLED_LOGS = {
     "Real flight 7 (public log, takeoff/land)": "data/real_flight_7_takeoff_land.ulg",
     "Real flight 8 (public log, hover/rtl)": "data/real_flight_8_hover_rtl.ulg",
     "Real flight 9 (public log, hover/land)": "data/real_flight_9_hover_land.ulg",
+    "Real flight 10 (PX4 SITL+Gazebo mission, simulated)": "data/real_flight_10_sitl_hover_rtl.ulg",
+    "Real flight 11 (public log, descend/hover/takeoff/rtl)": "data/real_flight_11_descend.ulg",
 }
 BUNDLED_LOGS = {label: path for label, path in BUNDLED_LOGS.items() if Path(path).exists()}
 

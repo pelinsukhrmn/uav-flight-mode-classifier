@@ -18,6 +18,7 @@ NAV_STATE_TO_MODE = {
     18: "land",          # AUTO_LAND
     20: "land",          # AUTO_PRECLAND
     5: "rtl",            # AUTO_RTL
+    12: "descend",       # DESCEND (distinct from AUTO_MISSION - e.g. RC-loss failsafe)
 }
 
 

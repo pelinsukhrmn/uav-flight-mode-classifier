@@ -20,6 +20,7 @@ REAL_FINETUNE_LOGS = [
     "data/real_flight.ulg", "data/real_flight_2.ulg",
     "data/real_flight_6_takeoff_land.ulg", "data/real_flight_7_takeoff_land.ulg",
     "data/real_flight_8_hover_rtl.ulg", "data/real_flight_9_hover_land.ulg",
+    "data/real_flight_10_sitl_hover_rtl.ulg", "data/real_flight_11_descend.ulg",
 ]
 REAL_HOLDOUT_FRACTION = 0.3  # kept out of fine-tuning entirely, for a leakage-free real accuracy check
 REGRESSION_TOLERANCE = 0.03  # max acceptable drop in synthetic test accuracy for the fine-tuned model to "win"
@@ -233,7 +234,11 @@ for name, result in results.items():
     print("Classification Report:")
     print(result["report"])
 
-best_name = max(results, key=lambda name: results[name]["accuracy"])
+# Pinned to LSTM rather than picked by max test accuracy: cpp/lstm_model.hpp only
+# implements a single-layer unidirectional LSTM forward pass, so a BiLSTM/GRU/Conv1D
+# winner here would break the cpp/ parity check. See the printed comparison above
+# for how the other architectures actually did this run.
+best_name = "LSTM"
 best_model = trained_models[best_name]
 
 print(f"\nSaving best model ({best_name}) for reuse on real flight logs...")

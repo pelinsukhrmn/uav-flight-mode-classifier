@@ -1,9 +1,4 @@
-"""Export the trained LSTM classifier(s) to a plain C++ header of float arrays.
-
-Run from the repo root after flight_sequence_classifier.py has produced the
-model files. Regenerate whenever the models are retrained - the header is
-derived output, not hand-maintained.
-"""
+# Eğitilmiş LSTM arıza modellerini düz float dizilerinden oluşan bir C++ başlık dosyasına aktarır.
 import sys
 from pathlib import Path
 
@@ -50,12 +45,12 @@ def export_model(prefix, cpp_name):
         f"constexpr int HORIZON = {meta.get('horizon', 0)};",
         "",
         "// LSTM gate order along the last axis: input, forget, cell, output (Keras convention).",
-        cpp_array("lstm_kernel", kernel),            # (N_FEATURES, 4*LSTM_UNITS)
-        cpp_array("lstm_recurrent_kernel", recurrent_kernel),  # (LSTM_UNITS, 4*LSTM_UNITS)
-        cpp_array("lstm_bias", bias),                 # (4*LSTM_UNITS,)
-        cpp_array("dense1_kernel", dense1_kernel),     # (LSTM_UNITS, DENSE1_UNITS)
+        cpp_array("lstm_kernel", kernel),
+        cpp_array("lstm_recurrent_kernel", recurrent_kernel),
+        cpp_array("lstm_bias", bias),
+        cpp_array("dense1_kernel", dense1_kernel),
         cpp_array("dense1_bias", dense1_bias),
-        cpp_array("dense2_kernel", dense2_kernel),     # (DENSE1_UNITS, N_CLASSES)
+        cpp_array("dense2_kernel", dense2_kernel),
         cpp_array("dense2_bias", dense2_bias),
         cpp_array("scaler_mean", scaler.mean_),
         cpp_array("scaler_scale", scaler.scale_),
@@ -75,5 +70,5 @@ def export_model(prefix, cpp_name):
 if __name__ == "__main__":
     import os
     os.chdir(Path(__file__).resolve().parent.parent)
-    export_model("flight_mode", "current_mode")
-    export_model("flight_mode_next", "next_mode")
+    export_model("fault", "current_fault")
+    export_model("fault_next", "next_fault")

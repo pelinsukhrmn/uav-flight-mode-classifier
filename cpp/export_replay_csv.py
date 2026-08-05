@@ -1,9 +1,4 @@
-"""Dump a .ulg log's raw feature rows to a CSV for main_replay.cpp to stream -
-the C++-side equivalent of live_inference.py's replay_log_source, since the
-C++ prototype has no pyulog equivalent to parse .ulg files directly.
-
-Usage: python cpp/export_replay_csv.py data/sample.ulg
-"""
+# Bir ArduPilot .bin logunun ham özellik satırlarını main_replay.cpp'nin okuyacağı bir CSV'ye döker.
 import sys
 from pathlib import Path
 
@@ -11,9 +6,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 import os
 os.chdir(Path(__file__).resolve().parent.parent)
 
-from flight_mode_inference import load_flight_log
+from ardupilot_log import load_flight_log
 
-log_path = sys.argv[1] if len(sys.argv) > 1 else "data/sample.ulg"
+log_path = sys.argv[1] if len(sys.argv) > 1 else "data/sitl_motor_out_1.bin"
 data = load_flight_log(log_path)
 
 out_path = Path(__file__).resolve().parent / "replay_data.csv"

@@ -1,13 +1,4 @@
-"""Streaming decision-support inference.
-
-Feeds raw feature rows one at a time (from a replayed .ulg log, or a live
-MAVLink connection) into a rolling window buffer, and reports the current-mode
-and next-mode forecasts as each new window completes.
-
-This is advisory only: it prints/returns messages, it never sends anything
-back to the vehicle. See README's "Future work" section for why direct
-control is out of scope for this model.
-"""
+# Canlı MAVLink veya log replay üzerinden akan arıza-öngörü karar-destek döngüsü.
 import argparse
 import time
 from collections import deque
@@ -15,15 +6,11 @@ from collections import deque
 import numpy as np
 import pandas as pd
 
-from flight_mode_inference import load_flight_log, load_artifacts, build_windows
+from inference_common import load_artifacts, build_windows
+from ardupilot_log import load_flight_log
 
 
 def replay_log_source(log_path, speed=20.0):
-    """Yield raw feature rows from a .ulg log, sleeping between them to mimic a live stream.
-
-    speed=0 disables sleeping (fastest possible replay - used by tests/demos).
-    speed=1.0 replays at the log's real sample rate; higher values are faster.
-    """
     data = load_flight_log(log_path)
     prev_ts = None
     for _, row in data.iterrows():
@@ -41,21 +28,12 @@ def replay_log_source(log_path, speed=20.0):
         }
 
 
-def mavlink_source(connection_string="udp:127.0.0.1:14540"):
-    """Yield raw feature rows from a live MAVLink connection (SITL or real telemetry radio).
-
-    Mirrors the feature definitions in flight_mode_inference.load_flight_log, but
-    reads them from ATTITUDE (roll/pitch already in radians, no quaternion math
-    needed) and LOCAL_POSITION_NED (vx/vy/vz) instead of a .ulg file.
-
-    NOT exercised in this environment - no pymavlink/SITL toolchain available here.
-    Written against the documented MAVLink message fields; verify against a real
-    SITL/vehicle connection before relying on it.
-    """
+def mavlink_source(connection_string="udp:127.0.0.1:14550"):
     from pymavlink import mavutil
 
     conn = mavutil.mavlink_connection(connection_string)
     conn.wait_heartbeat()
+    conn.mav.request_data_stream_send(conn.target_system, conn.target_component, mavutil.mavlink.MAV_DATA_STREAM_ALL, 10, 1)
 
     latest_attitude = None
     while True:
@@ -77,13 +55,6 @@ def mavlink_source(connection_string="udp:127.0.0.1:14540"):
 
 
 class LiveWindowBuffer:
-    """Rolling raw-feature history that produces the latest complete window on demand.
-
-    Keeps window_size + 1 rows: the extra row gives the window's first sample a
-    real predecessor to diff against, so its delta features match what an
-    offline build_windows() call would produce for the same stretch of flight.
-    """
-
     def __init__(self, meta):
         self.meta = meta
         self.rows = deque(maxlen=meta["window_size"] + 1)
@@ -92,7 +63,6 @@ class LiveWindowBuffer:
         self.rows.append(row)
 
     def latest_window(self):
-        """Return (window[1, w, f], window_end_timestamp), or (None, None) if not full yet."""
         if len(self.rows) < self.meta["window_size"] + 1:
             return None, None
         data = pd.DataFrame(self.rows)
@@ -111,10 +81,9 @@ def score_window(window, scaler, model, meta):
 
 
 def advisory(current_label, current_conf, next_label, next_conf, horizon_seconds):
-    """A short advisory string when the forecast disagrees with the current mode, else None."""
     if next_label == current_label:
         return None
-    urgent = next_label in ("anomaly", "land", "rtl") and next_conf >= 0.6
+    urgent = next_label != "normal" and next_conf >= 0.6
     level = "UYARI" if urgent else "bilgi"
     return (
         f"[{level}] su an: {current_label} ({current_conf:.2f}) -> "
@@ -123,13 +92,8 @@ def advisory(current_label, current_conf, next_label, next_conf, horizon_seconds
 
 
 def run(source, min_confidence=0.0, min_interval_s=1.0, on_message=print):
-    """min_interval_s throttles how often windows actually get scored (by flight time,
-    not wall-clock) - MAVLink attitude/position messages can arrive tens of times a
-    second, and mode changes don't need re-scoring on every single one of them. This
-    also keeps Keras's per-call overhead (each .predict() call costs tens of ms
-    regardless of batch size) from dominating runtime on a fast replay."""
-    meta, scaler, model = load_artifacts("flight_mode")
-    next_meta, next_scaler, next_model = load_artifacts("flight_mode_next")
+    meta, scaler, model = load_artifacts("fault")
+    next_meta, next_scaler, next_model = load_artifacts("fault_next")
     horizon = next_meta["horizon"]
 
     buffer = LiveWindowBuffer(meta)
@@ -161,8 +125,8 @@ def run(source, min_confidence=0.0, min_interval_s=1.0, on_message=print):
         msg = advisory(current_label, current_conf, next_label, next_conf, horizon_seconds)
 
         line = (
-            f"t={elapsed:6.1f}s  mode={current_label:<10} ({current_conf:.2f})  "
-            f"next~{horizon_seconds:4.1f}s={next_label:<10} ({next_conf:.2f})"
+            f"t={elapsed:6.1f}s  fault={current_label:<14} ({current_conf:.2f})  "
+            f"next~{horizon_seconds:4.1f}s={next_label:<14} ({next_conf:.2f})"
         )
         if msg:
             line += f"   {msg}"
@@ -174,9 +138,9 @@ def main():
         description="Live decision-support inference (advisory only - does not control the vehicle)."
     )
     parser.add_argument("--mode", choices=["replay", "mavlink"], default="replay")
-    parser.add_argument("--log", default="data/real_flight_2.ulg", help="Log to replay (--mode replay)")
+    parser.add_argument("--log", default="data/sitl_motor_out_1.bin", help="Log to replay (--mode replay)")
     parser.add_argument("--speed", type=float, default=20.0, help="Replay speed multiplier, 0=no sleep (--mode replay)")
-    parser.add_argument("--connection", default="udp:127.0.0.1:14540", help="MAVLink connection string (--mode mavlink)")
+    parser.add_argument("--connection", default="udp:127.0.0.1:14550", help="MAVLink connection string (--mode mavlink)")
     parser.add_argument("--min-confidence", type=float, default=0.0)
     parser.add_argument("--min-interval", type=float, default=1.0, help="Seconds of flight-time between scored windows")
     parser.add_argument("--max-rows", type=int, default=None, help="Stop after this many rows (demos/tests)")

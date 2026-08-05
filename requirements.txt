@@ -2,9 +2,8 @@ scikit-learn
 numpy
 pandas
 tensorflow-cpu
-pyulog
 joblib
 matplotlib
 streamlit==1.50.0
 pytest
-pymavlink  # optional - only needed for live_inference.py --mode mavlink
+pymavlink

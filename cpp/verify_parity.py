@@ -1,10 +1,4 @@
-"""Dump raw windows + the real Keras models' reference predictions, so the
-hand-rolled C++ forward pass (lstm_model.hpp) can be checked for numerical
-parity against the actual trained models on real flight data.
-
-Run from the repo root: python cpp/verify_parity.py
-Writes cpp/parity_data.txt, then run the compiled parity_check to compare.
-"""
+# C++ ileri geçişinin gerçek modellerle sayısal olarak eşleştiğini doğrulamak için referans veri üretir.
 import sys
 from pathlib import Path
 
@@ -14,15 +8,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 import os
 os.chdir(Path(__file__).resolve().parent.parent)
 
-from flight_mode_inference import load_flight_log, load_artifacts, build_windows
+from inference_common import load_artifacts, build_windows
+from ardupilot_log import load_flight_log
 
 N_WINDOWS = 100
-LOG = "data/real_flight_2.ulg"
+LOG = "data/sitl_motor_out_1.bin"
 
 data = load_flight_log(LOG)
 
 lines = []
-for prefix in ["flight_mode", "flight_mode_next"]:
+for prefix in ["fault", "fault_next"]:
     meta, scaler, model = load_artifacts(prefix)
     windows, window_end_idx = build_windows(data.copy(), meta)
     windows = windows[:N_WINDOWS]

@@ -1,15 +1,4 @@
-// C++ port of live_inference.py's replay-mode decision-support loop: streams
-// raw feature rows from a CSV (see export_replay_csv.py), maintains a
-// rolling window buffer, and scores both the current-mode and next-mode
-// models as each window completes. Advisory only - same as the Python
-// version, this never sends anything back to a vehicle.
-//
-// MAVLink live ingestion is NOT implemented here (unlike the Python
-// prototype's --mode mavlink): vendoring the MAVLink C headers and standing
-// up a SITL connection just to leave it untested is not worth it. This CSV
-// replay path proves the numerics and the streaming/windowing logic; wiring
-// a real MAVLink source in later just means writing one more row-producer
-// with the same interface, once there's a connection to actually test it against.
+// CSV'den akan ham özellik satırlarıyla arıza-öngörü modelini çalıştıran C++ replay döngüsü.
 #include <cstdio>
 #include <deque>
 #include <fstream>
@@ -18,8 +7,8 @@
 #include <vector>
 
 #include "lstm_model.hpp"
-#include "weights_current_mode.h"
-#include "weights_next_mode.h"
+#include "weights_current_fault.h"
+#include "weights_next_fault.h"
 
 namespace {
 
@@ -29,22 +18,19 @@ struct RawRow {
 };
 
 lstm_model::Weights make_weights_current() {
-    using namespace current_mode;
+    using namespace current_fault;
     return {lstm_kernel, lstm_recurrent_kernel, lstm_bias, dense1_kernel, dense1_bias,
             dense2_kernel, dense2_bias, scaler_mean, scaler_scale, CLASS_NAMES,
             WINDOW_SIZE, N_FEATURES, LSTM_UNITS, DENSE1_UNITS, N_CLASSES, HORIZON};
 }
 
 lstm_model::Weights make_weights_next() {
-    using namespace next_mode;
+    using namespace next_fault;
     return {lstm_kernel, lstm_recurrent_kernel, lstm_bias, dense1_kernel, dense1_bias,
             dense2_kernel, dense2_bias, scaler_mean, scaler_scale, CLASS_NAMES,
             WINDOW_SIZE, N_FEATURES, LSTM_UNITS, DENSE1_UNITS, N_CLASSES, HORIZON};
 }
 
-// Builds the 8-feature (4 raw + 4 delta) window from window_size+1 buffered
-// raw rows, matching flight_mode_inference.build_windows' ALL_FEATURES order
-// and its diff().fillna(0) delta convention.
 std::vector<float> build_window(const std::deque<RawRow>& buf, int window_size) {
     std::vector<float> window(window_size * 8);
     for (int t = 0; t < window_size; ++t) {
@@ -66,7 +52,7 @@ std::vector<float> build_window(const std::deque<RawRow>& buf, int window_size) 
 std::string advisory(const std::string& current_label, float current_conf,
                       const std::string& next_label, float next_conf) {
     if (next_label == current_label) return "";
-    bool urgent = (next_label == "anomaly" || next_label == "land" || next_label == "rtl") && next_conf >= 0.6f;
+    bool urgent = (next_label != "normal") && next_conf >= 0.6f;
     char buf[256];
     std::snprintf(buf, sizeof(buf), "   [%s] su an: %s (%.2f) -> tahmin: %s (%.2f)",
                   urgent ? "UYARI" : "bilgi", current_label.c_str(), current_conf, next_label.c_str(), next_conf);
@@ -85,7 +71,7 @@ int main(int argc, char** argv) {
         return 1;
     }
     std::string header;
-    std::getline(in, header);  // skip CSV header
+    std::getline(in, header);
 
     auto weights_current = make_weights_current();
     auto weights_next = make_weights_next();
@@ -124,7 +110,7 @@ int main(int argc, char** argv) {
         double avg_dt = elapsed / (n_rows > 1 ? (n_rows - 1) : 1);
         double horizon_seconds = horizon * avg_dt;
 
-        std::printf("t=%6.1fs  mode=%-10s (%.2f)  next~%4.1fs=%-10s (%.2f)%s\n",
+        std::printf("t=%6.1fs  fault=%-14s (%.2f)  next~%4.1fs=%-14s (%.2f)%s\n",
                     elapsed, current.class_name.c_str(), current.confidence,
                     horizon_seconds, next.class_name.c_str(), next.confidence,
                     advisory(current.class_name, current.confidence, next.class_name, next.confidence).c_str());

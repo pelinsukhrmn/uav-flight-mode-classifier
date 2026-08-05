@@ -1,8 +1,4 @@
-// Reads cpp/parity_data.txt (produced by verify_parity.py: real windows plus
-// the actual Keras models' reference probabilities) and checks that
-// lstm_model::predict reproduces those probabilities closely. This is the
-// thing that actually proves the hand-rolled forward pass is correct, not
-// just "it compiles and runs".
+// cpp/verify_parity.py'nin ürettiği referans olasılıkları C++ ileri geçişiyle karşılaştırıp doğrular.
 #include <cstdio>
 #include <fstream>
 #include <sstream>
@@ -10,20 +6,20 @@
 #include <vector>
 
 #include "lstm_model.hpp"
-#include "weights_current_mode.h"
-#include "weights_next_mode.h"
+#include "weights_current_fault.h"
+#include "weights_next_fault.h"
 
 namespace {
 
 lstm_model::Weights make_weights_current() {
-    using namespace current_mode;
+    using namespace current_fault;
     return {lstm_kernel, lstm_recurrent_kernel, lstm_bias, dense1_kernel, dense1_bias,
             dense2_kernel, dense2_bias, scaler_mean, scaler_scale, CLASS_NAMES,
             WINDOW_SIZE, N_FEATURES, LSTM_UNITS, DENSE1_UNITS, N_CLASSES, HORIZON};
 }
 
 lstm_model::Weights make_weights_next() {
-    using namespace next_mode;
+    using namespace next_fault;
     return {lstm_kernel, lstm_recurrent_kernel, lstm_bias, dense1_kernel, dense1_bias,
             dense2_kernel, dense2_bias, scaler_mean, scaler_scale, CLASS_NAMES,
             WINDOW_SIZE, N_FEATURES, LSTM_UNITS, DENSE1_UNITS, N_CLASSES, HORIZON};
@@ -53,7 +49,7 @@ int main() {
             std::istringstream header(line);
             std::string tag;
             header >> tag >> model_name >> n_windows >> n_features >> window_size >> n_classes;
-            weights = (model_name == "flight_mode") ? make_weights_current() : make_weights_next();
+            weights = (model_name == "fault") ? make_weights_current() : make_weights_next();
             have_weights = true;
             std::printf("\n=== %s: %d windows, %d features, window=%d, classes=%d ===\n",
                         model_name.c_str(), n_windows, n_features, window_size, n_classes);

@@ -9,8 +9,7 @@ env/
 .env
 .DS_Store
 Thumbs.db
-*_flight_mode_timeline.png
-.ulg/
+*_fault_timeline.png
 cpp/*.exe
 cpp/*.o
 cpp/parity_data.txt

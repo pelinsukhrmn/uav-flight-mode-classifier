@@ -11,7 +11,7 @@ from tensorflow import keras
 from flight_data import FEATURES, MODE_CYCLE as CYCLE, MODE_PARAMS, SPEED_SCALE_RANGE, PITCH_TRIM_RANGE, randomize_mode_params
 from flight_mode_inference import extract_labeled_real_windows, temporal_split
 
-WINDOW_SIZE = 10
+WINDOW_SIZE = 15
 N_FLIGHTS = 120
 N_TRAIN_FLIGHTS = 96
 PREDICTION_HORIZON = 10  # steps past the window's end that the forecaster predicts
@@ -139,22 +139,32 @@ def build_model(feature_layers):
         keras.layers.Input(shape=(WINDOW_SIZE, n_features)),
         *feature_layers,
         keras.layers.Dropout(0.2),
-        keras.layers.Dense(16, activation="relu"),
+        keras.layers.Dense(32, activation="relu"),
         keras.layers.Dense(len(classes), activation="softmax"),
     ])
 
 # Factories, not layer instances - a layer already used in one model keeps
 # and keeps training its weights if reused in another, so sharing instances
 # across CV folds/architectures would silently make them not-independent.
+#
+# Units doubled from the original 32 -> 64 for extra capacity (particularly
+# aimed at the weak `transition` class), with recurrent_dropout=0.1 added to
+# the recurrent layers to offset the added capacity's overfitting risk. The
+# Conv1D branch has no recurrent state to apply recurrent_dropout to, so it
+# gets a plain Dropout(0.1) between its two conv layers instead, for a
+# comparable regularization treatment.
+LSTM_UNITS = 64
+RECURRENT_DROPOUT = 0.1
 architectures = {
-    "LSTM": lambda: [keras.layers.LSTM(32)],
-    "GRU": lambda: [keras.layers.GRU(32)],
+    "LSTM": lambda: [keras.layers.LSTM(LSTM_UNITS, recurrent_dropout=RECURRENT_DROPOUT)],
+    "GRU": lambda: [keras.layers.GRU(LSTM_UNITS, recurrent_dropout=RECURRENT_DROPOUT)],
     "Conv1D": lambda: [
-        keras.layers.Conv1D(32, kernel_size=3, activation="relu", padding="causal"),
-        keras.layers.Conv1D(32, kernel_size=3, activation="relu", padding="causal"),
+        keras.layers.Conv1D(LSTM_UNITS, kernel_size=3, activation="relu", padding="causal"),
+        keras.layers.Dropout(0.1),
+        keras.layers.Conv1D(LSTM_UNITS, kernel_size=3, activation="relu", padding="causal"),
         keras.layers.GlobalAveragePooling1D(),
     ],
-    "BiLSTM": lambda: [keras.layers.Bidirectional(keras.layers.LSTM(32))],
+    "BiLSTM": lambda: [keras.layers.Bidirectional(keras.layers.LSTM(LSTM_UNITS, recurrent_dropout=RECURRENT_DROPOUT))],
 }
 
 def early_stopping():

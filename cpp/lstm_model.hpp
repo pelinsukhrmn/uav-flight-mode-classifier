@@ -54,7 +54,7 @@ struct Prediction {
 inline Prediction predict(const Weights& w, const float* window) {
     std::array<float, 128> h{};  // zero-initialized, supports units up to 128
     std::array<float, 128> c{};
-    std::array<float, 128> gates{};
+    std::array<float, 512> gates{};  // 4*units (4 gates concatenated) - up to units=128
     std::array<float, 32> scaled_row{};
 
     for (int t = 0; t < w.window_size; ++t) {

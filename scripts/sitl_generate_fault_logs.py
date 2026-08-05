@@ -181,6 +181,7 @@ def generate_one_flight(conn, fault_type, out_dir, log_dir, index,
         print(f"  no new .BIN found in {log_dir} - copy it manually")
         return
 
+    Path(out_dir).mkdir(parents=True, exist_ok=True)
     out_bin = Path(out_dir) / f"sitl_{fault_type}_{index}.bin"
     out_json = Path(out_dir) / f"sitl_{fault_type}_{index}.fault_windows.json"
     shutil.copy(log_path, out_bin)

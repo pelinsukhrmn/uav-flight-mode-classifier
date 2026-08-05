@@ -35,37 +35,37 @@ Each generator is injected against whatever mode/speed-scale/pitch-trim backgrou
 
 Trains the model. Time-series classification over 15-step sliding windows of sensor readings.
 
-- Dataset: 200 synthetic flights, each cycling through the background mode sequence with 0-2 fault segments independently drawn and inserted per flight.
+- Dataset: 200 synthetic flights, each cycling through the background mode sequence with 0-2 fault segments independently drawn and inserted per flight. Each fault segment lasts 30-70 timesteps - long enough that most of it falls outside the forecaster's fixed 10-step "structurally unlearnable" window (see Fault forecaster below), which was the actual lever that improved both models here, not just the forecaster.
 - Features: 4 raw sensor readings plus their timestep deltas, 8 total.
 - Compares four architectures (LSTM, GRU, Conv1D, BiLSTM) the same way the project always has: 64-unit recurrent layers with `recurrent_dropout=0.1` (Conv1D gets a plain `Dropout(0.1)` between its two causal conv layers instead), all sharing a `Dropout(0.2)` + `Dense(32, relu)` head.
 - Split by flight, not by window, so overlapping windows can't leak across train/test.
 - Class-weighted loss for the rare fault classes; `EarlyStopping` on validation accuracy for every CV fold and the final run.
 - 5-fold flight-level CV runs before the final split.
 
-Dataset composition (46,052 total timesteps):
+Dataset composition (49,051 total timesteps):
 
 | Class | Timesteps |
 |---|---|
-| `normal` | 40,725 |
-| `wind_gust_upset` | 1,444 |
-| `motor_out` | 1,388 |
-| `sensor_freeze` | 1,312 |
-| `gps_glitch` | 1,183 |
+| `normal` | 40,371 |
+| `sensor_freeze` | 2,455 |
+| `motor_out` | 2,183 |
+| `gps_glitch` | 2,088 |
+| `wind_gust_upset` | 1,954 |
 
 Results:
 
 | Architecture | Test accuracy | 5-fold CV |
 |---|---|---|
-| BiLSTM | 91.05% | 86.61% ± 5.15% |
-| Conv1D | 86.17% | 65.31% ± 7.76% |
-| GRU | 83.38% | 77.26% ± 4.55% |
-| LSTM | 78.07% | 83.25% ± 7.22% |
+| LSTM | 87.50% | 81.47% ± 3.05% |
+| BiLSTM | 86.54% | 82.41% ± 5.95% |
+| GRU | 83.58% | 74.71% ± 4.06% |
+| Conv1D | 70.72% | 79.63% ± 4.54% |
 
-`sensor_freeze` is the hardest class everywhere - on the pinned LSTM it scores 0.07 precision / 0.52 recall: the model flags it too eagerly and is usually wrong when it does. A single flatlined feature against an otherwise-quiet background (e.g. hover, which is already low-variance) is genuinely hard to tell apart from ordinary quiet flight with this feature set alone.
+`sensor_freeze` is still the hardest class - on the pinned LSTM it scores 0.11 precision / 0.20 recall, better precision than before but worse recall: a single flatlined feature against an otherwise-quiet background (e.g. hover, which is already low-variance) is genuinely hard to tell apart from ordinary quiet flight with this feature set alone. An attempted fix via domain randomization was tried and reverted - see Future work.
 
-BiLSTM wins by a wide margin this run, but production is **pinned to LSTM regardless**: `cpp/lstm_model.hpp` only implements a single-layer unidirectional LSTM forward pass, and shipping a BiLSTM would break C++ parity. This costs real accuracy (78.07% vs 91.05%) - worth stating plainly rather than glossing over, since it's a real and current tradeoff, not a historical one.
+LSTM actually **wins** this run (87.50% vs BiLSTM's 86.54%), so pinning production to LSTM for C++ parity - `cpp/lstm_model.hpp` only implements a single-layer unidirectional LSTM forward pass - currently costs nothing measurable. That wasn't true before the fault-segment-length change below (LSTM used to trail BiLSTM by 13 points); it's not guaranteed to stay true on the next retrain either, so the comparison is still run and reported every time rather than assumed.
 
-This comparison is run on the nowcast task only, and the winner is reused for the forecaster without separately checking whether it still wins there. That matters here specifically: a bidirectional architecture's backward pass starts at the window's *last* timestep, which for nowcasting is the exact point being labeled - it gets that timestep's raw signal before any recurrent decay, an advantage a unidirectional LSTM only accumulates after 14 steps of forgetting. For the forecaster, the labeled point is 10 steps past the window's end and isn't in the window at all, in either direction, so this advantage may not carry over. BiLSTM's win here is real but may be partly an artifact of the easier task, not evidence it's the better architecture for the harder one this project actually cares about - not re-measured for the forecaster, since the C++ constraint pins production to LSTM regardless of the answer.
+This comparison is run on the nowcast task only, and the winner is reused for the forecaster without separately checking whether it still wins there - see the caveat about bidirectional architectures having a structural nowcast-only advantage in the Fault forecaster section below.
 
 The pinned LSTM has ~20,933 parameters (single-layer LSTM(64) + Dense(32) + Dense(5)). Running this script saves `models/fault_model.keras`, its scaler, and metadata, plus a second forecasting model.
 
@@ -80,12 +80,15 @@ python src/fault_sequence_classifier.py
 The same script also trains a second model that forecasts the fault state 10 steps ahead (`PREDICTION_HORIZON = 10`, roughly 1-2 seconds depending on sample rate) from the same 15-step window - only the label shifts forward.
 
 - Saved as `models/fault_next_model.keras` / `..._scaler.joblib` / `..._meta.joblib`.
-- Test accuracy: 55.52%, vs 78.07% for nowcasting on the same split. Forecasting ahead is a harder problem across every class: `motor_out` precision drops to 0.15, `sensor_freeze` to 0.03. `gps_glitch` and `wind_gust_upset` hold up comparatively better (recall 0.61 and 0.48).
-- This is the model doing the actual job this project exists for - naming a fault before it fully manifests - and its current accuracy should be read as a first, synthetic-only baseline, not a finished result.
+- Test accuracy: **64.71%**, vs 87.50% for nowcasting on the same split. `motor_out` precision/recall: 0.65/0.73. `wind_gust_upset`: 0.58/0.65. `gps_glitch`: 0.24/0.44. `sensor_freeze`: 0.06/0.47.
+- Fault segments were lengthened from 20-40 to 30-70 timesteps specifically to help this task, and it worked (up from 55.52% before): with `PREDICTION_HORIZON=10` fixed, the earliest 10 timesteps of *every* fault segment are structurally unlearnable for the forecaster - a window whose forecast target lands in those first 10 steps contains zero fault signal of its own (the target hasn't started yet when the window ends), so the model is being asked to predict something not present in its input at all. That's a fixed-size blind spot regardless of segment length, so lengthening segments shrinks its *share* of the labeled data (from up to half of a 20-step segment down to as little as a seventh of a 70-step one) without changing anything about the `normal` background.
+- This also explains why nowcasting improved alongside it (78.07% → 87.50%) even though nowcasting has no such blind spot: longer segments mean less segment-boundary dilution per window generally, and more total fault-class training data at a fixed synthetic flight count.
+- Because the architecture comparison earlier is run on the nowcast task only, its winner might not actually be the best choice for this harder task - a bidirectional architecture's backward pass starts at the window's *last* timestep, which for nowcasting is the exact point being labeled, but for forecasting the labeled point isn't in the window at all in either direction. BiLSTM's nowcast win (before this change) may have been partly an artifact of that structural advantage rather than genuine sequence-modeling superiority; not re-measured for the forecaster specifically, since the C++ constraint pins production to LSTM regardless of the answer.
+- This is the model doing the actual job this project exists for - naming a fault before it fully manifests - and its current accuracy should be read as a synthetic-only result, not a finished one.
 
 ### SITL fine-tuning
 
-The CV-winning-for-parity (LSTM) model gets a fine-tuning pass on ground-truth-labeled ArduPilot SITL windows, gated so real data can only improve the production model, never quietly regress it - same acceptance-test structure the project has always used: fine-tune on real + a stratified synthetic replay sample, accept only if real held-out accuracy doesn't drop and synthetic accuracy doesn't regress by more than 3 points.
+The pinned production (LSTM) model gets a fine-tuning pass on ground-truth-labeled ArduPilot SITL windows, gated so real data can only improve the production model, never quietly regress it - same acceptance-test structure the project has always used: fine-tune on real + a stratified synthetic replay sample, accept only if real held-out accuracy doesn't drop and synthetic accuracy doesn't regress by more than 3 points.
 
 **No SITL logs exist yet.** `SITL_FINETUNE_LOGS` in this file lists the paths `scripts/sitl_generate_fault_logs.py` (see below) is meant to produce; until you generate them, both the nowcaster and forecaster print "not found, skipping" for every entry and stay on the synthetic-only model. This is not a bug - it is the honest current state. No ArduPilot equivalent of PX4's public Flight Review log database exists to mine instead, so SITL generation is the only realistic real-data source for v1.
 
@@ -140,7 +143,7 @@ A dependency-free C++ port of the inference path, unchanged in substance by eith
 - `export_weights.py` - dumps trained weights + scaler into `weights_current_fault.h` / `weights_next_fault.h`. Regenerate after every retrain.
 - `lstm_model.hpp` - the forward pass: standardize → single-layer LSTM (Keras gate order) → Dense+ReLU → Dense+softmax.
 - `verify_parity.py` + `parity_check.cpp` - confirms the C++ forward pass matches Keras on real windows. **Verified against a real ArduPilot `.bin` log** (a pre-existing bench-test SITL flight, not one of this project's own fault logs): 200 windows checked, 0 label mismatches, max probability difference 0.000001.
-- `benchmark.cpp` - isolated latency measurement, needs no real log. Freshly measured on this dev machine after the pivot: **~306 microseconds for both models combined, ~153 microseconds per single-model inference** - comfortably inside a 100Hz (10ms) control-loop budget. Not directly comparable to the project's earlier ~460us figure from before the pivot; that was a different model (9 classes) on different hardware.
+- `benchmark.cpp` - isolated latency measurement, needs no real log. Freshly measured on this dev machine: **~313 microseconds for both models combined, ~156 microseconds per single-model inference** - comfortably inside a 100Hz (10ms) control-loop budget. Not directly comparable to the project's pre-pivot ~460us figure; that was a different model (9 classes) on different hardware.
 - `export_replay_csv.py` + `main_replay.cpp` - the C++ equivalent of `live_inference.py --mode replay`.
 
 `weights_current_fault.h`/`weights_next_fault.h` are generated output that can drift from the actual `.keras` models if someone retrains and forgets to re-export. The `cpp-parity` job in `.github/workflows/tests.yml` catches this on every push by regenerating the headers and failing the build if they don't match, then rebuilding and rerunning the parity check against the live models - that job will fail until a real log exists for `verify_parity.py` to run against.
@@ -233,8 +236,8 @@ pytest
   1. *Fixed*: the arm command was being rejected outright (`STATUSTEXT`: "Arm: Accels inconsistent" - ArduCopter's prearm check rejects arming until SITL's simulated IMUs settle after a fresh boot) and was only ever sent once, so it never got retried once the check cleared a few seconds later. Fixed in both scripts by resending the arm command every few seconds until `HEARTBEAT` confirms armed.
   2. *Root cause found via direct source instrumentation, still unresolved*: once armed, `MAV_CMD_NAV_TAKEOFF` comes back `COMMAND_ACK` result 4 (rejected). Several plausible preconditions were checked live and ruled out one by one: EKF position flags (`EKF_STATUS_REPORT.flags`) were already ok, `landed_state` (`EXTENDED_SYS_STATE`) correctly reported ON_GROUND, and a `HOME_POSITION` message had already been received. A local ArduCopter source checkout (not part of this repo) was temporarily instrumented with `GCS_SEND_TEXT` debug lines at every `return false` in `Mode::do_user_takeoff_U_m`/`ModeGuided::do_user_takeoff_start_m` (`ArduCopter/takeoff.cpp`, `ArduCopter/mode_guided.cpp`) and rebuilt (reverted afterward, not committed anywhere) - this gave a definitive answer instead of another guess: the rejection reason varies between `has_user_takeoff false` (impossible in GUIDED mode by that mode's own code, meaning the vehicle wasn't actually in GUIDED at that instant) and `not armed` - **the vehicle's mode/armed state is flapping during the sequence, not stuck on one static precondition.** A hypothesis that our script never sends its own GCS `HEARTBEAT` (unlike MAVProxy, which does continuously, and which sends an identical `MAV_CMD_NAV_TAKEOFF` packet - confirmed by reading MAVProxy's own `cmd_takeoff` source) was tested by adding a 1Hz heartbeat-send loop to both scripts - this did not resolve it either. The actual trigger for the flapping is still unknown. Next step if picked up again: attach `gdb` to the SITL binary at the exact rejection point rather than inferring from MAVLink telemetry - `STATUSTEXT` debug lines proved which branch fails but not the live variable state (e.g. `copter.current_loc`, AHRS origin, active failsafes) behind it.
 - **SITL fine-tuning has never run** as a result - both models are still 100% synthetic-only in production. The live pipeline itself (connection, streaming, windowing, dual-model scoring) is confirmed working; what's missing is a flight that actually stays armed and airborne through a fault injection.
-- **Live-confirmed: `sensor_freeze` over-triggers on genuinely quiet flight**, not just in synthetic test data - a real SITL vehicle sitting still on the ground was classified `sensor_freeze` at ~80%+ confidence essentially the whole time. This is the same weakness the synthetic numbers already showed (0.07 nowcast / 0.03 forecast precision), now also seen on real telemetry. A single flatlined feature against a quiet background is genuinely hard to distinguish from ordinary quiet flight with only 4 sensor values. An attempted fix (a per-flight "quiet normal" domain randomization added to the synthetic training data) was tried and reverted - it reduced the false-positive rate on quiet backgrounds but crashed recall for every class, including `sensor_freeze` itself (0.52 → 0.11 on the pinned LSTM) and the forecaster overall (55.52% → 39.17%), a net regression on every measured number. Still unresolved.
-- **The forecaster is a first synthetic-only baseline** (55.52% vs 78.07% nowcasting) - expect it to move once SITL fine-tuning actually runs.
+- **Live-confirmed: `sensor_freeze` over-triggers on genuinely quiet flight**, not just in synthetic test data - a real SITL vehicle sitting still on the ground was classified `sensor_freeze` at ~80%+ confidence essentially the whole time (measured against the model as it stood at the time: 0.07 nowcast / 0.03 forecast precision). A single flatlined feature against a quiet background is genuinely hard to distinguish from ordinary quiet flight with only 4 sensor values. An attempted fix (a per-flight "quiet normal" domain randomization added to the synthetic training data) was tried and reverted - it reduced the false-positive rate on quiet backgrounds but crashed recall for every class, including `sensor_freeze` itself (0.52 → 0.11 on the pinned LSTM at the time) and the forecaster overall (55.52% → 39.17%), a net regression on every measured number. Current precision is 0.11 nowcast / 0.06 forecast (see `fault_sequence_classifier.py` above) - better than when this was first observed, as a side effect of the fault-segment-length fix below, but not because this specific weakness was directly addressed. Still unresolved and not re-tested live.
+- **The forecaster is a synthetic-only result** (64.71% vs 87.50% nowcasting) - expect both to move once SITL fine-tuning actually runs.
 - **ArduPilot's `ERR.Subsys` enum is only partially mapped** - only code 25 (`THRUST_LOSS_CHECK`) is confirmed by name; the codes that would give `gps_glitch` a native (non-sidecar) real-log ground truth source need confirming against an actual logged flight.
 - **No public ArduPilot log database exists** to mine for real-world fault examples the way PX4's Flight Review database was used before the pivot - SITL generation is the only realistic v1 real-data path.
 - `live_inference.py` and `cpp/` are advisory-only by design, not wired into the autopilot. Closing that loop needs real fault ground truth at scale, a measured latency budget on actual target hardware (a Raspberry Pi/Jetson, not this dev machine), and a case for why a probabilistic classifier should override the autopilot's own failsafe state machine at all.

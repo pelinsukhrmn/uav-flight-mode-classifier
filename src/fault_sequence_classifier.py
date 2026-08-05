@@ -70,7 +70,7 @@ def generate_flight(flight_id, rng, n_faults_range=N_FAULTS_RANGE):
         fault_type = rng.choice(FAULT_CLASSES)
         insert_at = int(rng.integers(0, len(segments) + 1))
         context_mode = context_modes[min(insert_at, len(context_modes) - 1)]
-        n_f = int(rng.integers(20, 40))
+        n_f = int(rng.integers(30, 70))
         fault_values = FAULT_GENERATORS[fault_type](n_f, rng, mode_params[context_mode])
         segments.insert(insert_at, (fault_type, fault_values))
         context_modes.insert(insert_at, context_mode)

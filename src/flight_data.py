@@ -1,3 +1,4 @@
+# Sentetik uçuş üretimi için paylaşılan sabitler ve arka plan mod parametreleri.
 FEATURES = ["vertical_speed", "horizontal_speed", "roll_angle", "pitch_angle"]
 
 MODE_CYCLE = ["hover", "takeoff", "ascend", "cruise", "rtl", "descend", "land"]
@@ -15,12 +16,6 @@ MODE_PARAMS = {
 TRAVEL_MODES = ["ascend", "cruise", "rtl", "descend"]
 SPEED_FEATURES = ["vertical_speed", "horizontal_speed"]
 SPEED_SCALE_RANGE = (0.2, 1.3)
-
-# Real airframes can hover/fly with a persistent non-zero pitch trim (rigging,
-# CG offset) that has nothing to do with flight mode. A real PX4 log showed a
-# ~-12 deg pitch bias throughout the whole flight, which a pitch_angle mean of
-# 0 for "hover" can't represent. Randomizing a per-flight trim teaches the
-# model to rely on pitch relative to the flight's own baseline.
 PITCH_TRIM_RANGE = (-15.0, 8.0)
 
 

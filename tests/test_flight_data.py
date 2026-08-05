@@ -1,3 +1,4 @@
+# flight_data.py'nin domain randomizasyon fonksiyonunu test eder.
 from flight_data import MODE_PARAMS, TRAVEL_MODES, randomize_mode_params
 
 

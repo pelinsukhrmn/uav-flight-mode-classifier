@@ -171,8 +171,10 @@ streamlit run src/app.py
 
 The independent-reading (no window, no memory of the rest of the flight) approach, retargeted at the new fault taxonomy after the pivot - kept because the argument for why this doesn't work is, if anything, stronger for fault detection than it was for mode classification: a single instant's roll/pitch can't distinguish "a wind gust in progress" from "just banking," any more than it could distinguish a mode from a trim offset.
 
-- Dataset: synthetic, drawing from the same `fault_injection` generators used by the sequence model, collapsed to independent rows.
+- Dataset: synthetic, drawing from the same `fault_injection` generators used by the sequence model, collapsed to independent rows. Each fault class is drawn from 15 independent realizations (separate mode/speed-scale/pitch-trim/noise-scale/frozen-value draws) rather than one, and the train/test split is grouped by realization (`GroupShuffleSplit`) - an earlier ungrouped version let `sensor_freeze` rows from the same single realization leak its one frozen value across both the train and test split, inflating its score to a meaningless 1.00 precision/recall by memorizing a constant instead of learning anything.
 - Algorithm: Random Forest.
+
+With that leakage fixed, the result actually makes the "why we moved to a sequence model" case concretely: **84.08% overall accuracy, but `sensor_freeze` precision/recall are both 0.00** - a single reading genuinely cannot tell "this value happens to be constant across recent samples" from "this value could belong to any class," since that's a property of a *sequence*, not an instant. `wind_gust_upset` (0.85/0.56) and `gps_glitch` (0.40/0.70) fare better since their shapes (a spike, a step) partly show up in on-the-spot feature values, but still lag the sequence model by a wide margin.
 
 Run:
 

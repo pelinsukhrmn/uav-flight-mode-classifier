@@ -1,0 +1,62 @@
+{
+  "handoff_purpose": "Context for a fresh Claude Code session (different machine, Linux) continuing work on this repo. The previous session ran on Windows and could not run PX4 SITL natively, so the user is switching to Linux specifically to test the MAVLink live connection. Read this whole file before doing anything.",
+  "project": {
+    "name": "uav-flight-mode-classifier",
+    "what_it_is": "A flight-mode classifier for PX4 drones: reads 4 sensor values (vertical speed, horizontal speed, roll, pitch), outputs current flight mode + a ~1-2s-ahead forecast. LSTM trained on synthetic data, fine-tuned on 11 real PX4 logs. Also has a dependency-free C++ inference port for real-time/low-latency use.",
+    "readme_is_source_of_truth": "README.md was fully rewritten 2026-08-05 for both accuracy and tone - read it fresh, don't assume older summaries of this project are current."
+  },
+  "project_direction_do_not_relitigate": {
+    "positioning": "Embedded/robotics decision-support system, NOT an ML/data-science portfolio piece. This was explicitly decided by the user after trying an ML-portfolio framing first and rejecting it.",
+    "priority_order": [
+      "Real-time / latency / cpp/ engine quality and correctness",
+      "Actual PX4/MAVLink integration proof (this is the current task)",
+      "Model accuracy (secondary - already decent, not the current focus)"
+    ],
+    "instruction": "If a task pulls back toward 'chase higher model accuracy' or generic ML-portfolio framing without a robotics/latency angle, check with the user before proceeding - this direction was set deliberately and revisited once already."
+  },
+  "communication_preferences": {
+    "language": "User writes in Turkish, expects Turkish responses.",
+    "readme_tone": "User explicitly said the README 'smelled like AI' - repeated self-referential hedging ('a real, checked result, not a fluke'), dev-diary bug postmortems, excessive em-dash asides. It was rewritten to state things once, plainly. Keep this style in any future README edits - do not regress toward the old verbose/hedgy pattern.",
+    "verify_before_claiming": "This project has a strong norm of never publishing a number that wasn't actually measured on the current code/model. A stale C++ latency claim (~4us, actually ~460us on the current model) was caught and fixed this way. Apply the same discipline to the MAVLink work: don't claim it 'works' without an actual verified message exchange."
+  },
+  "immediate_task": {
+    "goal": "Test src/live_inference.py --mode mavlink against a real PX4 SITL instance, end to end, for the first time ever.",
+    "status": "UNTESTED. README's live_inference.py section and Future work section both flag mavlink_source as 'written against the documented message fields but not exercised' - this has been true since it was first written. This session is the first real attempt to prove or disprove that it works.",
+    "relevant_code": {
+      "src/live_inference.py": "Contains mavlink_source() - connects via pymavlink, reads ATTITUDE and LOCAL_POSITION_NED messages, feeds them into LiveWindowBuffer which reuses flight_mode_inference.build_windows(). Also contains replay_log_source() (the tested, working path) for comparison if mavlink_source needs debugging.",
+      "src/flight_mode_inference.py": "build_windows(), the shared preprocessing both streaming and offline paths call - if windows come out wrong, this is the shared logic to check.",
+      "tests/": "Has unit tests for LiveWindowBuffer's logic with synthetic/mocked input, but nothing that exercises a real MAVLink socket."
+    },
+    "commands_already_given_to_user": [
+      "git clone https://github.com/pelinsukhrmn/uav-flight-mode-classifier.git && cd uav-flight-mode-classifier",
+      "python3.11 -m venv venv && source venv/bin/activate && pip install -r requirements.txt",
+      "git clone https://github.com/PX4/PX4-Autopilot.git --recursive && cd PX4-Autopilot",
+      "bash ./Tools/setup/ubuntu.sh   # then restart the terminal/session",
+      "make px4_sitl gazebo   # or HEADLESS=1 make px4_sitl gazebo for no GUI",
+      "# in a second terminal, back in the project repo:",
+      "python src/live_inference.py --mode mavlink --connection udp:127.0.0.1:14540"
+    ],
+    "known_unknowns_to_watch_for": [
+      "Message field names/units: pymavlink's ATTITUDE (roll/pitch in radians) and LOCAL_POSITION_NED (vx/vy/vz in m/s, NED frame) must be converted to match flight_mode_inference.py's convention (roll_angle/pitch_angle in degrees from quaternion, vertical_speed = -vz, horizontal_speed = sqrt(vx^2+vy^2)) - verify src/live_inference.py's mavlink_source does this conversion correctly, it was written but never run against real data.",
+      "SITL's default MAVLink stream rates may need adjusting (PX4 param MAV_0_RATE or similar) if messages arrive too slowly for --min-interval to ever fire.",
+      "udp:127.0.0.1:14540 is PX4 SITL's default MAVSDK/offboard port - confirm it's actually emitting ATTITUDE and LOCAL_POSITION_NED on that port (may need SITL's mavlink instance/stream config checked if nothing arrives).",
+      "If pymavlink isn't installed: pip install pymavlink (it's already an optional line in requirements.txt)."
+    ]
+  },
+  "recent_history_this_repo": {
+    "last_few_commits_meaning": [
+      "7ad38f6 - added 2 more real PX4 logs (1 SITL-generated, 1 for descend coverage), fine-tuned, pinned LSTM as production architecture",
+      "4d4f430 - widened model capacity (units 32->64, window 10->15), fixed a real cpp/ buffer-overflow bug (gates array), added cpp/benchmark.cpp after finding the old ~4us latency claim was stale (real number ~460us), rewrote README tone, pinned streamlit==1.50.0 in requirements.txt",
+      "5ff5374 - updated the live demo URL in README after the Streamlit Cloud app had to be deleted and redeployed"
+    ],
+    "streamlit_deploy_saga_resolved": "The live demo was fully broken and fixed across several rounds: private-repo GitHub access -> Python 3.14 default ignoring runtime.txt -> streamlit/starlette version crash -> anonymous login wall. Ended up reverting the repo back to PUBLIC (a private-repo 'public app sharing' setting did not actually work despite being the documented Streamlit feature) - if asked to make the repo private again, warn that it will likely re-break the demo.",
+    "dji_neo_plan": "User plans to eventually test with a DJI Neo (Fly More Combo) drone, not yet purchased. Already researched: DJI Neo has no MAVLink support and isn't on DJI's official Mobile SDK list, so only an offline log-analysis path (decrypt DJI Fly app's .txt log via a third-party tool, convert to CSV) is realistic - not a live path. Don't start building this until the user says they've bought the drone."
+  },
+  "instructions_for_the_new_session": [
+    "Read README.md fully before doing anything else - it is current as of commit 5ff5374.",
+    "Help the user work through the PX4 SITL setup and the live_inference.py --mode mavlink test. Expect debugging - this is genuinely untested code.",
+    "If it works: update README.md's live_inference.py section to remove the 'not exercised in this environment' caveat and replace it with what was actually verified (what messages arrived, whether predictions looked sane, etc.) - don't overclaim beyond what was actually seen working.",
+    "If it doesn't work: debug it like normal engineering work, not a rewrite - the goal is to make the existing documented design actually work, not redesign it, unless a real design flaw is found.",
+    "Once done, this session_handoff.json file should be deleted from the repo (git rm) - it's a one-time handoff artifact, not meant to be permanent project documentation."
+  ]
+}

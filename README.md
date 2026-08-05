@@ -4,7 +4,7 @@ A flight-mode classifier for PX4 drones, built to run in real time. It reads fou
 
 Read in this order: [flight_sequence_classifier.py](#flight_sequence_classifierpy) (train the model) → [real_log_inference.py](#real_log_inferencepy) (check it against real flights) → [live_inference.py](#live_inferencepy) and [cpp/](#cpp) (run it in real time) → [app.py](#apppy) (a Streamlit UI for poking at all of the above). [flight_mode_classifier.py](#baseline-flight_mode_classifierpy-superseded) is an earlier, superseded approach kept for comparison.
 
-Live demo: https://pelinsukhrmn-uav-flight-mode-classifier-app-u3jseo.streamlit.app
+Live demo: https://uav-flight-mode-classifier-orh886xba7huq8b284jdvc.streamlit.app
 
 ## Setup
 

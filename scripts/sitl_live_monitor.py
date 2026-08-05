@@ -366,6 +366,7 @@ def main():
 
     conn = mavutil.mavlink_connection(args.connection)
     conn.wait_heartbeat()
+    conn.mav.param_set_send(conn.target_system, conn.target_component, b"DISARM_DELAY", 0.0, mavutil.mavlink.MAV_PARAM_TYPE_REAL32)
     conn.mav.request_data_stream_send(conn.target_system, conn.target_component, mavutil.mavlink.MAV_DATA_STREAM_ALL, 10, 1)
     conn.mav.command_long_send(
         conn.target_system, conn.target_component,

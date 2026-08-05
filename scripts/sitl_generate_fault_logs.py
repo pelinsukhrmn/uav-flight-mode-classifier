@@ -68,7 +68,7 @@ def arm_with_retry(conn, timeout=45, resend_interval=3):
     return False
 
 
-def wait_for_ekf_position_ok(conn, timeout=30):
+def wait_for_ekf_position_ok(conn, timeout=90):
     required = mavutil.mavlink.EKF_POS_HORIZ_ABS | mavutil.mavlink.EKF_POS_VERT_ABS
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -201,7 +201,9 @@ def main():
 
     conn = mavutil.mavlink_connection(args.connection)
     conn.wait_heartbeat()
+    conn.mav.request_data_stream_send(conn.target_system, conn.target_component, mavutil.mavlink.MAV_DATA_STREAM_ALL, 10, 1)
     threading.Thread(target=heartbeat_loop, args=(conn,), daemon=True).start()
+    set_param(conn, "DISARM_DELAY", 0)
 
     for i in range(args.count):
         index = args.start_index + i

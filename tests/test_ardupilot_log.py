@@ -44,9 +44,28 @@ class FakeConnection:
         return self._messages.pop(0)
 
 
+def test_load_flight_log_reads_new_signals(monkeypatch):
+    messages = [
+        _fake_message("ATT", TimeUS=1_000_000, Roll=0.0, Pitch=0.0, DesRoll=0.0, DesPitch=0.0),
+        _fake_message("CTUN", TimeUS=1_000_000, CRt=2.0),
+        _fake_message("GPS", TimeUS=1_000_000, Spd=1.0),
+        _fake_message("RCOU", TimeUS=1_000_000, C1=1500, C2=1500, C3=2000, C4=1400),
+        _fake_message("XKF4", TimeUS=1_000_000, C=0, SV=1.25),
+        _fake_message("BARO", TimeUS=1_000_000, I=0, Alt=100.0),
+        _fake_message("BARO", TimeUS=2_000_000, I=0, Alt=102.0),
+    ]
+    monkeypatch.setattr(al.mavutil, "mavlink_connection", lambda path: FakeConnection(messages))
+
+    data = al.load_flight_log("fake_log_path")
+
+    assert data["motor_spread"].iloc[0] == 600
+    assert data["ekf_vel_innov"].iloc[0] == 1.25
+    assert data["baro_climb_rate"].iloc[0] == 0.0
+
+
 def test_load_flight_log_keeps_att_angles_in_degrees(monkeypatch):
     messages = [
-        _fake_message("ATT", TimeUS=1_000_000, Roll=30.0, Pitch=-15.0),
+        _fake_message("ATT", TimeUS=1_000_000, Roll=30.0, Pitch=-15.0, DesRoll=32.0, DesPitch=-15.0),
         _fake_message("CTUN", TimeUS=1_000_000, CRt=1.5),
         _fake_message("GPS", TimeUS=1_000_000, Spd=4.0),
     ]
@@ -54,8 +73,10 @@ def test_load_flight_log_keeps_att_angles_in_degrees(monkeypatch):
 
     data = al.load_flight_log("fake_log_path")
 
+    assert data["motor_spread"].iloc[0] == 0.0
     assert data["roll_angle"].iloc[0] == 30.0
     assert data["pitch_angle"].iloc[0] == -15.0
+    assert data["roll_track_err"].iloc[0] == 2.0
     assert data["vertical_speed"].iloc[0] == 1.5
     assert data["horizontal_speed"].iloc[0] == 4.0
 

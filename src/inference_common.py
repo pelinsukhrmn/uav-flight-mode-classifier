@@ -10,6 +10,21 @@ def temporal_split(X, y, train_fraction=0.7):
     return X[:split], y[:split], X[split:], y[split:]
 
 
+def select_holdout_flights(flight_labels, holdout_fraction):
+    by_class = {}
+    for path, labels in flight_labels:
+        fault_labels = {label for label in labels if label != "normal"}
+        key = sorted(fault_labels)[0] if fault_labels else "normal"
+        by_class.setdefault(key, []).append(path)
+
+    holdout = []
+    for key in sorted(by_class):
+        paths = sorted(by_class[key])
+        n_holdout = max(1, round(holdout_fraction * len(paths))) if len(paths) > 1 else 0
+        holdout.extend(paths[:n_holdout])
+    return holdout
+
+
 def load_artifacts(prefix="fault"):
     meta = joblib.load(f"models/{prefix}_meta.joblib")
     scaler = joblib.load(f"models/{prefix}_scaler.joblib")
@@ -61,6 +76,54 @@ def predict(data, meta, scaler, model):
         "window_end_idx": window_end_idx,
         "classes": classes,
     }
+
+
+def base_feature_columns(features):
+    columns = {}
+    for index, feature in enumerate(features):
+        base = feature[: -len("_delta")] if feature.endswith("_delta") else feature
+        columns.setdefault(base, []).append(index)
+    return columns
+
+
+def explain_window(window, scaler, model, meta, top_k=3):
+    features = meta["features"]
+    window_size, n_features = window.shape
+
+    def score(candidate):
+        scaled = scaler.transform(candidate.reshape(-1, n_features)).reshape(1, window_size, n_features)
+        return model.predict(scaled, verbose=0)[0]
+
+    probabilities = score(window)
+    class_index = int(np.argmax(probabilities))
+    label = meta["classes"][class_index]
+    confidence = float(probabilities[class_index])
+
+    typical = getattr(scaler, "mean_", np.zeros(n_features))
+    contributions = []
+    for base, columns in base_feature_columns(features).items():
+        occluded = window.copy()
+        occluded[:, columns] = typical[columns]
+        drop = confidence - float(score(occluded)[class_index])
+        value_column = columns[0]
+        contributions.append({
+            "feature": base,
+            "contribution": drop,
+            "observed": float(window[-1, value_column]),
+            "typical": float(typical[value_column]),
+        })
+
+    contributions.sort(key=lambda item: item["contribution"], reverse=True)
+    return {"label": label, "confidence": confidence, "evidence": contributions[:top_k]}
+
+
+def format_explanation(explanation):
+    parts = [
+        f"{item['feature']}={item['observed']:.2f} (tipik {item['typical']:.2f})"
+        for item in explanation["evidence"] if item["contribution"] > 0
+    ]
+    reason = ", ".join(parts) if parts else "belirgin tek bir kanit yok"
+    return f"{explanation['label']} ({explanation['confidence']:.2f}) - kanit: {reason}"
 
 
 def summarize_segments(times, labels, confidences):

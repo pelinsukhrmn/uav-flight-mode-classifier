@@ -5,13 +5,13 @@ import pandas as pd
 import joblib
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import KFold, train_test_split
-from sklearn.metrics import confusion_matrix, classification_report
+from sklearn.metrics import confusion_matrix, classification_report, f1_score
 from sklearn.utils.class_weight import compute_class_weight
 from tensorflow import keras
 
 from flight_data import FEATURES, MODE_CYCLE as CYCLE, MODE_PARAMS, SPEED_SCALE_RANGE, PITCH_TRIM_RANGE, randomize_mode_params
 from fault_injection import FAULT_CLASSES, FAULT_GENERATORS
-from inference_common import extract_labeled_real_windows, temporal_split
+from inference_common import extract_labeled_real_windows, select_holdout_flights
 from ardupilot_log import load_flight_log, load_fault_ground_truth
 
 WINDOW_SIZE = 15
@@ -20,12 +20,7 @@ N_TRAIN_FLIGHTS = 160
 N_FAULTS_RANGE = (0, 2)
 PREDICTION_HORIZON = 10
 
-SITL_FINETUNE_LOGS = [
-    "data/sitl_motor_out_1.bin", "data/sitl_motor_out_2.bin",
-    "data/sitl_gps_glitch_1.bin", "data/sitl_gps_glitch_2.bin",
-    "data/sitl_wind_gust_upset_1.bin", "data/sitl_wind_gust_upset_2.bin",
-    "data/sitl_sensor_freeze_1.bin", "data/sitl_sensor_freeze_2.bin",
-]
+SITL_FINETUNE_LOGS = sorted(str(path) for path in Path("data").glob("sitl_*.bin"))
 REAL_HOLDOUT_FRACTION = 0.3
 REGRESSION_TOLERANCE = 0.03
 FINETUNE_LR = 1e-4
@@ -137,6 +132,7 @@ def fine_tune_on_real_data(model, model_prefix, scaler, classes, label_to_index,
     meta = {"classes": classes, "features": ALL_FEATURES, "window_size": WINDOW_SIZE}
     real_train_windows, real_train_labels, real_holdout_windows, real_holdout_labels = [], [], [], []
 
+    usable_logs = []
     for log_path in SITL_FINETUNE_LOGS:
         if not Path(log_path).exists():
             print(f"  {log_path}: not found, skipping")
@@ -147,12 +143,18 @@ def fine_tune_on_real_data(model, model_prefix, scaler, classes, label_to_index,
         if X_real is None:
             print(f"  {log_path}: no usable fault ground truth, skipping")
             continue
-        X_tr, y_tr, X_ho, y_ho = temporal_split(X_real, y_real, train_fraction=1 - REAL_HOLDOUT_FRACTION)
-        print(f"  {log_path}: {len(X_tr)} windows for fine-tuning, {len(X_ho)} held out for evaluation")
-        real_train_windows.append(X_tr)
-        real_train_labels.append(y_tr)
-        real_holdout_windows.append(X_ho)
-        real_holdout_labels.append(y_ho)
+        usable_logs.append((log_path, X_real, y_real))
+
+    holdout_logs = set(select_holdout_flights([(path, y) for path, _, y in usable_logs], REAL_HOLDOUT_FRACTION))
+    for log_path, X_real, y_real in usable_logs:
+        if log_path in holdout_logs:
+            print(f"  {log_path}: {len(X_real)} windows held out for evaluation (whole flight)")
+            real_holdout_windows.append(X_real)
+            real_holdout_labels.append(y_real)
+        else:
+            print(f"  {log_path}: {len(X_real)} windows for fine-tuning")
+            real_train_windows.append(X_real)
+            real_train_labels.append(y_real)
 
     if not real_train_windows or not any(len(w) for w in real_holdout_windows):
         print("No usable SITL ground-truth windows found - keeping the synthetic-only model as production.")
@@ -166,6 +168,7 @@ def fine_tune_on_real_data(model, model_prefix, scaler, classes, label_to_index,
     X_real_train_scaled = scaler.transform(X_real_train.reshape(-1, n_features)).reshape(len(X_real_train), WINDOW_SIZE, n_features)
     X_real_holdout_scaled = scaler.transform(X_real_holdout.reshape(-1, n_features)).reshape(len(X_real_holdout), WINDOW_SIZE, n_features)
 
+    pre_finetune_probabilities = model.predict(X_real_holdout_scaled, verbose=0)
     pre_finetune_real_acc = model.evaluate(X_real_holdout_scaled, y_real_holdout, verbose=0)[1]
     print(f"\nSynthetic-only model on SITL held-out windows: {pre_finetune_real_acc * 100:.2f}% "
           f"({len(X_real_holdout)} windows, classes: {sorted(set(np.concatenate(real_train_labels)) | set(np.concatenate(real_holdout_labels)))})")
@@ -198,9 +201,24 @@ def fine_tune_on_real_data(model, model_prefix, scaler, classes, label_to_index,
     print(f"Fine-tuned model on synthetic test set: {post_finetune_synthetic_acc * 100:.2f}% "
           f"(was {base_test_acc * 100:.2f}% before fine-tuning, {synthetic_regression * 100:+.2f} points)")
 
-    if post_finetune_real_acc >= pre_finetune_real_acc and synthetic_regression <= REGRESSION_TOLERANCE:
-        print("\nFine-tuned model is at least as good on SITL data and didn't regress synthetic "
-              "accuracy beyond tolerance - saving it as production.")
+    majority_class = int(np.bincount(y_real_holdout).argmax())
+    majority_real_acc = np.bincount(y_real_holdout).max() / len(y_real_holdout)
+    majority_macro_f1 = f1_score(y_real_holdout, np.full_like(y_real_holdout, majority_class),
+                                 average="macro", zero_division=0)
+    pre_macro_f1 = f1_score(y_real_holdout, np.argmax(pre_finetune_probabilities, axis=1),
+                            average="macro", zero_division=0)
+    post_macro_f1 = f1_score(y_real_holdout, np.argmax(model.predict(X_real_holdout_scaled, verbose=0), axis=1),
+                             average="macro", zero_division=0)
+    print(f"Majority-class baseline on the same SITL held-out windows: {majority_real_acc * 100:.2f}% "
+          f"accuracy, {majority_macro_f1:.3f} macro-F1")
+    print(f"Macro-F1 on SITL held-out windows: {pre_macro_f1:.3f} synthetic-only -> {post_macro_f1:.3f} fine-tuned")
+
+    if post_macro_f1 <= majority_macro_f1:
+        print(f"\nFine-tuned model does not beat the majority-class baseline on macro-F1 "
+              f"({post_macro_f1:.3f} <= {majority_macro_f1:.3f}) - keeping the synthetic-only model as production.")
+    elif post_macro_f1 >= pre_macro_f1 and synthetic_regression <= REGRESSION_TOLERANCE:
+        print("\nFine-tuned model beats the majority-class baseline on macro-F1 and didn't regress "
+              "synthetic accuracy beyond tolerance - saving it as production.")
         model.save(f"models/{model_prefix}_model.keras")
     else:
         print("\nFine-tuned model did not clear the acceptance bar - keeping the synthetic-only model as production.")

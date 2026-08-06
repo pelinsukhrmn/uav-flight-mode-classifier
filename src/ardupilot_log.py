@@ -2,11 +2,11 @@
 import json
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 from pymavlink import mavutil
 
-EV_ARMED_ID = 10
+EV_ARMED_IDS = (10, 15)
+ERR_CODE_RESOLVED = 0
 
 ERR_SUBSYS_TO_FAULT = {
     25: "motor_out",
@@ -26,7 +26,7 @@ def load_flight_log(log_path):
             break
         msg_type = msg.get_type()
         if msg_type == "ATT":
-            att_rows.append({"timestamp": msg.TimeUS, "roll_angle": np.degrees(msg.Roll), "pitch_angle": np.degrees(msg.Pitch)})
+            att_rows.append({"timestamp": msg.TimeUS, "roll_angle": msg.Roll, "pitch_angle": msg.Pitch})
         elif msg_type == "CTUN":
             ctun_rows.append({"timestamp": msg.TimeUS, "vertical_speed": msg.CRt})
         elif msg_type == "GPS":
@@ -73,25 +73,42 @@ def load_native_fault_ground_truth(log_path):
         msg = log.recv_match(type=["EV", "ERR"], blocking=False)
         if msg is None:
             break
-        if msg.get_type() == "EV" and armed_time_us is None and getattr(msg, "Id", None) == EV_ARMED_ID:
+        if msg.get_type() == "EV" and armed_time_us is None and getattr(msg, "Id", None) in EV_ARMED_IDS:
             armed_time_us = msg.TimeUS
         elif msg.get_type() == "ERR":
             err_rows.append(msg)
 
-    if armed_time_us is None or not err_rows:
+    if not err_rows:
         return None
 
     data = load_flight_log(log_path)
+    if data.empty:
+        return None
+    if armed_time_us is None:
+        armed_time_us = data["timestamp"].iloc[0]
+
     ground_truth_mode = pd.Series("normal", index=data.index)
     any_fault_mapped = False
+    open_faults = {}
     for msg in err_rows:
         if msg.TimeUS < armed_time_us:
             continue
-        fault = ERR_SUBSYS_TO_FAULT.get(getattr(msg, "Subsys", None))
+        subsys = getattr(msg, "Subsys", None)
+        fault = ERR_SUBSYS_TO_FAULT.get(subsys)
         if fault is None:
             continue
+        if getattr(msg, "ECode", None) == ERR_CODE_RESOLVED:
+            start_us = open_faults.pop(subsys, None)
+            if start_us is not None:
+                in_window = (data["timestamp"] >= start_us) & (data["timestamp"] < msg.TimeUS)
+                ground_truth_mode[in_window] = fault
+                any_fault_mapped = True
+            continue
+        open_faults.setdefault(subsys, msg.TimeUS)
+
+    for subsys, start_us in open_faults.items():
+        ground_truth_mode[data["timestamp"] >= start_us] = ERR_SUBSYS_TO_FAULT[subsys]
         any_fault_mapped = True
-        ground_truth_mode[data["timestamp"] >= msg.TimeUS] = fault
 
     if not any_fault_mapped:
         return None

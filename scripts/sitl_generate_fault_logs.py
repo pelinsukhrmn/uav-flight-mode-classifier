@@ -62,13 +62,28 @@ def arm_with_retry(conn, timeout=45, resend_interval=3):
         if msg_type == "HEARTBEAT" and bool(msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED):
             return True
         if msg_type == "COMMAND_ACK" and msg.command == mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM and msg.result != 0:
-            print(f"  arm rejected: MAV_RESULT={msg.result}, retrying")
+            print(f"  arm rejected: MAV_RESULT={msg.result}, retrying", flush=True)
         if msg_type == "STATUSTEXT":
-            print(f"  STATUSTEXT: {msg.text}")
+            print(f"  STATUSTEXT: {msg.text}", flush=True)
     return False
 
 
-def wait_for_ekf_position_ok(conn, timeout=90):
+def drain(conn, duration_s):
+    deadline = time.time() + duration_s
+    while time.time() < deadline:
+        conn.recv_match(blocking=True, timeout=0.5)
+
+
+def wait_disarmed(conn, timeout=120):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        msg = conn.recv_match(type="HEARTBEAT", blocking=True, timeout=1)
+        if msg is not None and not bool(msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED):
+            return True
+    return False
+
+
+def wait_for_ekf_position_ok(conn, timeout=150):
     required = mavutil.mavlink.EKF_POS_HORIZ_ABS | mavutil.mavlink.EKF_POS_VERT_ABS
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -109,45 +124,40 @@ def takeoff_with_retry(conn, altitude, timeout=20, resend_interval=3):
             continue
         msg_type = msg.get_type()
         if msg_type == "COMMAND_ACK" and msg.command == mavutil.mavlink.MAV_CMD_NAV_TAKEOFF:
-            print(f"  takeoff ack: MAV_RESULT={msg.result}")
+            print(f"  takeoff ack: MAV_RESULT={msg.result}", flush=True)
             if msg.result == 0:
                 return True
         if msg_type == "STATUSTEXT":
-            print(f"  STATUSTEXT: {msg.text}")
+            print(f"  STATUSTEXT: {msg.text}", flush=True)
     return False
 
 
 def arm_and_takeoff(conn, altitude, climb_wait_s):
+    if not wait_for_ekf_position_ok(conn):
+        print("  WARNING: EKF position never reported ok - attempting arm anyway", flush=True)
+    if not wait_for_home_position(conn):
+        print("  WARNING: home position never confirmed - attempting arm anyway", flush=True)
+
     wait_mode(conn, "GUIDED")
     if not arm_with_retry(conn):
-        print("  WARNING: never confirmed armed - proceeding anyway, flight will likely be invalid")
-    if not wait_for_ekf_position_ok(conn):
-        print("  WARNING: EKF position never reported ok - attempting takeoff anyway")
-    if not wait_for_home_position(conn):
-        print("  WARNING: home position never confirmed - attempting takeoff anyway")
-
-    print("  settling 8s after arming before takeoff (re-arming if needed)")
-    settle_deadline = time.time() + 8
-    while time.time() < settle_deadline:
-        msg = conn.recv_match(type="HEARTBEAT", blocking=True, timeout=1)
-        if msg is not None and not bool(msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED):
-            print("  re-arming during settle wait...")
-            arm_with_retry(conn, timeout=10)
+        print("  WARNING: never confirmed armed - proceeding anyway, flight will likely be invalid", flush=True)
+    armed_wall = time.time()
 
     if not takeoff_with_retry(conn, altitude):
-        print("  WARNING: takeoff command never ACKed as accepted - proceeding anyway")
+        print("  WARNING: takeoff command never ACKed as accepted - proceeding anyway", flush=True)
 
     climb_deadline = time.time() + climb_wait_s
     while time.time() < climb_deadline:
         msg = conn.recv_match(type="HEARTBEAT", blocking=True, timeout=1)
         if msg is not None and not bool(msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED):
-            print("  WARNING: disarmed during climb wait")
+            print("  WARNING: disarmed during climb wait", flush=True)
+    return armed_wall
 
 
 def inject_fault(conn, fault_type, hold_s):
     for name, value in FAULT_PARAMS[fault_type]:
         set_param(conn, name, value)
-    time.sleep(hold_s)
+    drain(conn, hold_s)
     for name, value in FAULT_CLEAR[fault_type]:
         set_param(conn, name, value)
 
@@ -162,23 +172,23 @@ def newest_bin_log(log_dir, after_mtime):
 def generate_one_flight(conn, fault_type, out_dir, log_dir, index,
                          altitude=20.0, climb_wait_s=15.0, background_s=25.0, hold_s=15.0, recover_s=15.0):
     start_mtime = time.time()
-    flight_start_wall = time.time()
 
-    arm_and_takeoff(conn, altitude, climb_wait_s)
-    time.sleep(background_s)
+    log_t0_wall = arm_and_takeoff(conn, altitude, climb_wait_s)
+    drain(conn, background_s)
 
-    fault_start_s = time.time() - flight_start_wall
+    fault_start_s = time.time() - log_t0_wall
     inject_fault(conn, fault_type, hold_s)
-    fault_end_s = time.time() - flight_start_wall
+    fault_end_s = time.time() - log_t0_wall
 
-    time.sleep(recover_s)
+    drain(conn, recover_s)
     wait_mode(conn, "RTL")
-    conn.motors_disarmed_wait()
+    if not wait_disarmed(conn):
+        print("  WARNING: vehicle never disarmed after RTL - log may be truncated", flush=True)
 
-    time.sleep(2.0)
+    drain(conn, 2.0)
     log_path = newest_bin_log(log_dir, start_mtime)
     if log_path is None:
-        print(f"  no new .BIN found in {log_dir} - copy it manually")
+        print(f"  no new .BIN found in {log_dir} - copy it manually", flush=True)
         return
 
     Path(out_dir).mkdir(parents=True, exist_ok=True)
@@ -186,7 +196,7 @@ def generate_one_flight(conn, fault_type, out_dir, log_dir, index,
     out_json = Path(out_dir) / f"sitl_{fault_type}_{index}.fault_windows.json"
     shutil.copy(log_path, out_bin)
     out_json.write_text(json.dumps([{"fault": fault_type, "start_s": fault_start_s, "end_s": fault_end_s}]))
-    print(f"  wrote {out_bin} + {out_json}")
+    print(f"  wrote {out_bin} + {out_json}", flush=True)
 
 
 def main():
@@ -207,7 +217,7 @@ def main():
 
     for i in range(args.count):
         index = args.start_index + i
-        print(f"Flight {i + 1}/{args.count}: injecting {args.fault} (index {index})")
+        print(f"Flight {i + 1}/{args.count}: injecting {args.fault} (index {index})", flush=True)
         generate_one_flight(conn, args.fault, args.out_dir, args.sitl_log_dir, index)
 
 

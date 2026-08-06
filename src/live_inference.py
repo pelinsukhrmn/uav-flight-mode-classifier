@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 
 from inference_common import load_artifacts, build_windows
-from ardupilot_log import load_flight_log
+from ardupilot_log import load_flight_log, LOG_FEATURES
 
 
 def replay_log_source(log_path, speed=20.0):
@@ -19,12 +19,72 @@ def replay_log_source(log_path, speed=20.0):
             if dt > 0:
                 time.sleep(dt / speed)
         prev_ts = row["timestamp"]
-        yield {
-            "timestamp": row["timestamp"],
-            "vertical_speed": row["vertical_speed"],
-            "horizontal_speed": row["horizontal_speed"],
-            "roll_angle": row["roll_angle"],
-            "pitch_angle": row["pitch_angle"],
+        yield {"timestamp": row["timestamp"], **{feature: row[feature] for feature in LOG_FEATURES}}
+
+
+SEA_LEVEL_HPA = 1013.25
+
+
+def pressure_to_altitude_m(pressure_hpa):
+    return 44330.0 * (1.0 - (pressure_hpa / SEA_LEVEL_HPA) ** 0.1903)
+
+
+def quaternion_to_roll_pitch_deg(q):
+    w, x, y, z = q
+    roll = np.arctan2(2.0 * (w * x + y * z), 1.0 - 2.0 * (x * x + y * y))
+    pitch = np.arcsin(np.clip(2.0 * (w * y - z * x), -1.0, 1.0))
+    return np.degrees(roll), np.degrees(pitch)
+
+
+class MavlinkFeatureState:
+    def __init__(self):
+        self.roll_angle = None
+        self.pitch_angle = None
+        self.target_roll = 0.0
+        self.target_pitch = 0.0
+        self.motor_spread = 0.0
+        self.ekf_vel_innov = 0.0
+        self.baro_climb_rate = 0.0
+        self._baro_alt = None
+        self._baro_time_s = None
+
+    def update(self, msg):
+        msg_type = msg.get_type()
+        if msg_type == "ATTITUDE":
+            self.roll_angle = np.degrees(msg.roll)
+            self.pitch_angle = np.degrees(msg.pitch)
+            return None
+        if msg_type == "ATTITUDE_TARGET":
+            self.target_roll, self.target_pitch = quaternion_to_roll_pitch_deg(msg.q)
+            return None
+        if msg_type == "SERVO_OUTPUT_RAW":
+            outputs = [msg.servo1_raw, msg.servo2_raw, msg.servo3_raw, msg.servo4_raw]
+            self.motor_spread = float(max(outputs) - min(outputs))
+            return None
+        if msg_type == "EKF_STATUS_REPORT":
+            self.ekf_vel_innov = float(msg.velocity_variance)
+            return None
+        if msg_type == "SCALED_PRESSURE":
+            altitude = pressure_to_altitude_m(msg.press_abs)
+            now_s = msg.time_boot_ms / 1000.0
+            if self._baro_alt is not None and now_s > self._baro_time_s:
+                self.baro_climb_rate = (altitude - self._baro_alt) / (now_s - self._baro_time_s)
+            self._baro_alt, self._baro_time_s = altitude, now_s
+            return None
+        if msg_type != "LOCAL_POSITION_NED" or self.roll_angle is None:
+            return None
+
+        return {
+            "timestamp": msg.time_boot_ms * 1000,
+            "vertical_speed": -msg.vz,
+            "horizontal_speed": (msg.vx ** 2 + msg.vy ** 2) ** 0.5,
+            "roll_angle": self.roll_angle,
+            "pitch_angle": self.pitch_angle,
+            "motor_spread": self.motor_spread,
+            "ekf_vel_innov": self.ekf_vel_innov,
+            "baro_climb_rate": self.baro_climb_rate,
+            "roll_track_err": abs(self.target_roll - self.roll_angle),
+            "pitch_track_err": abs(self.target_pitch - self.pitch_angle),
         }
 
 
@@ -35,23 +95,20 @@ def mavlink_source(connection_string="udp:127.0.0.1:14550"):
     conn.wait_heartbeat()
     conn.mav.request_data_stream_send(conn.target_system, conn.target_component, mavutil.mavlink.MAV_DATA_STREAM_ALL, 10, 1)
 
-    latest_attitude = None
+    conn.mav.command_long_send(
+        conn.target_system, conn.target_component,
+        mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL, 0,
+        mavutil.mavlink.MAVLINK_MSG_ID_ATTITUDE_TARGET, 100000, 0, 0, 0, 0, 0,
+    )
+
+    state = MavlinkFeatureState()
     while True:
-        msg = conn.recv_match(type=["ATTITUDE", "LOCAL_POSITION_NED"], blocking=True)
+        msg = conn.recv_match(blocking=True)
         if msg is None:
             continue
-        if msg.get_type() == "ATTITUDE":
-            latest_attitude = msg
-            continue
-        if latest_attitude is None:
-            continue
-        yield {
-            "timestamp": msg.time_boot_ms * 1000,
-            "vertical_speed": -msg.vz,
-            "horizontal_speed": (msg.vx ** 2 + msg.vy ** 2) ** 0.5,
-            "roll_angle": np.degrees(latest_attitude.roll),
-            "pitch_angle": np.degrees(latest_attitude.pitch),
-        }
+        row = state.update(msg)
+        if row is not None:
+            yield row
 
 
 class LiveWindowBuffer:

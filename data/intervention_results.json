@@ -1,0 +1,93 @@
+[
+  {
+    "arm": "baseline",
+    "valid": true,
+    "alarm_time_s": 0.5421881675720215,
+    "intervened_at_s": null,
+    "crashed": false,
+    "max_descent_rate_ms": 8.21,
+    "impact_descent_rate_ms": 8.21,
+    "distance_from_home_m": 107.7,
+    "final_alt_m": -0.3,
+    "still_armed": true,
+    "trial": 0
+  },
+  {
+    "arm": "model",
+    "valid": true,
+    "alarm_time_s": 0.7380545139312744,
+    "intervened_at_s": 0.7380545139312744,
+    "crashed": false,
+    "max_descent_rate_ms": 8.33,
+    "impact_descent_rate_ms": 8.33,
+    "distance_from_home_m": 107.3,
+    "final_alt_m": -0.3,
+    "still_armed": true,
+    "trial": 0
+  },
+  {
+    "arm": "baseline",
+    "valid": true,
+    "alarm_time_s": 0.6609673500061035,
+    "intervened_at_s": null,
+    "crashed": false,
+    "max_descent_rate_ms": 8.0,
+    "impact_descent_rate_ms": 7.9,
+    "distance_from_home_m": 108.8,
+    "final_alt_m": -0.7,
+    "still_armed": true,
+    "trial": 1
+  },
+  {
+    "arm": "model",
+    "valid": true,
+    "alarm_time_s": 0.6512191295623779,
+    "intervened_at_s": 0.6512191295623779,
+    "crashed": false,
+    "max_descent_rate_ms": 7.87,
+    "impact_descent_rate_ms": 7.76,
+    "distance_from_home_m": 109.7,
+    "final_alt_m": -0.7,
+    "still_armed": true,
+    "trial": 1
+  },
+  {
+    "arm": "baseline",
+    "valid": true,
+    "alarm_time_s": 0.6626441478729248,
+    "intervened_at_s": null,
+    "crashed": false,
+    "max_descent_rate_ms": 8.1,
+    "impact_descent_rate_ms": 8.1,
+    "distance_from_home_m": 111.7,
+    "final_alt_m": -1.2,
+    "still_armed": true,
+    "trial": 2
+  },
+  {
+    "arm": "model",
+    "valid": true,
+    "alarm_time_s": 0.6570041179656982,
+    "intervened_at_s": 0.6570041179656982,
+    "crashed": false,
+    "max_descent_rate_ms": 8.09,
+    "impact_descent_rate_ms": 8.09,
+    "distance_from_home_m": 110.0,
+    "final_alt_m": -1.2,
+    "still_armed": true,
+    "trial": 2
+  },
+  {
+    "arm": "baseline",
+    "valid": true,
+    "alarm_time_s": 0.6543135643005371,
+    "intervened_at_s": null,
+    "crashed": false,
+    "max_descent_rate_ms": 8.25,
+    "impact_descent_rate_ms": 8.1,
+    "distance_from_home_m": 110.1,
+    "final_alt_m": -1.0,
+    "still_armed": true,
+    "trial": 3
+  }
+]

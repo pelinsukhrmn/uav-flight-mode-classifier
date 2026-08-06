@@ -315,6 +315,27 @@ Per-class precision/recall on real logs, plus the false-alarm count on fault-fre
 python scripts/evaluate_real_logs.py data/sitl_*.bin
 ```
 
+## scripts/intervention_experiment.py
+
+A controlled A/B experiment that asks the question a lead-time number cannot answer on its own: does warning earlier actually change what happens to the vehicle? Each trial flies the same fault twice from a freshly booted SITL - once letting ArduPilot handle it alone (`baseline`), once switching to `LAND` the moment the model raises a sustained `motor_out` alarm (`model`) - and records impact descent rate (highest descent rate in the 2 seconds before touchdown), max descent rate, distance from home, and whether ArduPilot declared a crash.
+
+First run, 4 trials at `SIM_ENGINE_MUL=0.4` (one motor at 40% thrust), 30 m altitude:
+
+| Arm | n | Mean impact descent | Mean distance from home | Crashes |
+|---|---|---|---|---|
+| baseline | 4 | 8.08 m/s | 109.6 m | 0/4 |
+| model | 3 | 8.06 m/s | 109.0 m | 0/3 |
+
+**No measurable difference.** The model raised its alarm 0.65s after injection and the intervention fired immediately, and it changed nothing. The reason is mechanical rather than statistical: with one motor at 40% thrust the vehicle is already descending uncontrolled, and `LAND` commands a descent - it cannot return thrust the vehicle does not have. Early warning is only worth as much as the action it triggers, and `LAND` is the wrong action here.
+
+What this measures correctly and what it does not: the harness itself is now sound (single MAVLink consumer, fresh SITL per arm, force-disarm before each trial, impact rate measured over a 2-second pre-touchdown window). What it has not yet explored is the intervention (RTL, which uses remaining altitude to get closer to home, rather than LAND) or the severity range (at 40% thrust loss there may be no recoverable outcome at all; a sweep would show whether a region exists where intervening early matters).
+
+Getting this to run took four fixes worth recording, since three of them produced plausible-looking but invalid data first: the reader thread and the flight-control functions were both calling `recv_match` on the same connection and stealing each other's `COMMAND_ACK`/`HEARTBEAT` messages; home position was captured before GPS was valid, yielding a 14,949 km distance-from-home; the vehicle stayed `armed` with `landed_state=IN_AIR` at -1.4 m between trials, so every subsequent takeoff was rejected with `MAV_RESULT=4` and no `STATUSTEXT` to explain it; and impact descent rate was sampled at the instant altitude crossed 0.5 m, by which point the vehicle had already slowed, reporting 0.0 m/s for a flight that hit the ground at 8 m/s.
+
+```bash
+python scripts/intervention_experiment.py --trials 4 --severity 0.4
+```
+
 ## Explainability
 
 `inference_common.explain_window` returns the evidence behind a prediction, not just the label. It occludes each feature in turn - replacing it and its delta with the training-set mean - and reports how far the predicted class's confidence falls. Model-agnostic, no gradients, so it ports to `cpp/` unchanged.
@@ -345,4 +366,4 @@ pytest
 - **The lead-time result rests on three flights**, all `motor_out`, all in SITL. `gps_glitch` has no comparable measurement because ArduPilot's GPS failsafe never fired in our logs.
 - **ArduPilot's `ERR.Subsys` enum is only partially mapped** - only code 25 (`THRUST_LOSS_CHECK`) is confirmed by name.
 - **No public ArduPilot log database exists** to mine for real-world fault examples - SITL generation is the only realistic v1 real-data path, and everything measured here is therefore simulation-only.
-- `live_inference.py` and `cpp/` are advisory-only by design, not wired into the autopilot. The obvious next experiment is to close that loop *in simulation only*: fly the same fault twice, once letting ArduPilot's own failsafe handle it and once triggering RTL at our model's alarm, and measure impact energy, distance from home, and how many unnecessary RTLs the false alarms cost. That turns "9.7 seconds earlier" into a statement about outcomes rather than timing.
+- **Early detection did not change the outcome** in the first run of `scripts/intervention_experiment.py` - see that section. The lead time is real; converting it into a better outcome is not solved.

@@ -89,5 +89,18 @@
     "final_alt_m": -1.0,
     "still_armed": true,
     "trial": 3
+  },
+  {
+    "arm": "model",
+    "valid": true,
+    "alarm_time_s": 0.6532497406005859,
+    "intervened_at_s": 0.6532497406005859,
+    "crashed": false,
+    "max_descent_rate_ms": 8.15,
+    "impact_descent_rate_ms": 8.0,
+    "distance_from_home_m": 110.6,
+    "final_alt_m": -1.1,
+    "still_armed": true,
+    "trial": 3
   }
 ]

@@ -1,6 +1,8 @@
 # ArduPilot SITL'de kontrollü arıza enjekte edip etiketli .bin log + fault_windows.json üretir.
 import argparse
 import json
+import math
+import random
 import shutil
 import threading
 import time
@@ -154,12 +156,33 @@ def arm_and_takeoff(conn, altitude, climb_wait_s):
     return armed_wall
 
 
-def inject_fault(conn, fault_type, hold_s):
+def inject_fault(conn, fault_type, hold_s, rng):
     for name, value in FAULT_PARAMS[fault_type]:
         set_param(conn, name, value)
-    drain(conn, hold_s)
+    fly_random_leg(conn, rng, hold_s)
     for name, value in FAULT_CLEAR[fault_type]:
         set_param(conn, name, value)
+
+
+def fly_velocity(conn, vx, vy, duration_s, resend_interval=0.5):
+    type_mask = 0b0000_11_111_000_111
+    deadline = time.time() + duration_s
+    last_send = 0.0
+    while time.time() < deadline:
+        if time.time() - last_send >= resend_interval:
+            conn.mav.set_position_target_local_ned_send(
+                0, conn.target_system, conn.target_component,
+                mavutil.mavlink.MAV_FRAME_LOCAL_NED, type_mask,
+                0, 0, 0, vx, vy, 0, 0, 0, 0, 0, 0,
+            )
+            last_send = time.time()
+        conn.recv_match(blocking=True, timeout=0.2)
+
+
+def fly_random_leg(conn, rng, duration_s):
+    speed = rng.uniform(2.0, 9.0)
+    heading = rng.uniform(0, 2 * math.pi)
+    fly_velocity(conn, speed * math.cos(heading), speed * math.sin(heading), duration_s)
 
 
 def newest_bin_log(log_dir, after_mtime):
@@ -169,18 +192,29 @@ def newest_bin_log(log_dir, after_mtime):
     return max(candidates, key=lambda p: p.stat().st_mtime)
 
 
-def generate_one_flight(conn, fault_type, out_dir, log_dir, index,
-                         altitude=20.0, climb_wait_s=15.0, background_s=25.0, hold_s=15.0, recover_s=15.0):
+def generate_one_flight(conn, fault_type, out_dir, log_dir, index, rng, previous_log_path=None, climb_wait_s=15.0):
     start_mtime = time.time()
 
+    altitude = rng.uniform(10.0, 40.0)
+    background_s = rng.uniform(20.0, 40.0)
+    hold_s = rng.uniform(12.0, 25.0)
+    recover_s = rng.uniform(12.0, 25.0)
+    ambient_wind = rng.uniform(0.0, 2.0) if fault_type == "wind_gust_upset" else rng.uniform(0.0, 6.0)
+    set_param(conn, "SIM_WIND_SPD", ambient_wind)
+    set_param(conn, "SIM_WIND_DIR", rng.uniform(0.0, 360.0))
+    print(f"  alt={altitude:.0f}m background={background_s:.0f}s hold={hold_s:.0f}s ambient_wind={ambient_wind:.1f}m/s", flush=True)
+
     log_t0_wall = arm_and_takeoff(conn, altitude, climb_wait_s)
-    drain(conn, background_s)
+    fly_random_leg(conn, rng, background_s)
 
-    fault_start_s = time.time() - log_t0_wall
-    inject_fault(conn, fault_type, hold_s)
-    fault_end_s = time.time() - log_t0_wall
+    windows = []
+    if fault_type != "none":
+        fault_start_s = time.time() - log_t0_wall
+        inject_fault(conn, fault_type, hold_s, rng)
+        windows.append({"fault": fault_type, "start_s": fault_start_s, "end_s": time.time() - log_t0_wall})
+        set_param(conn, "SIM_WIND_SPD", ambient_wind)
 
-    drain(conn, recover_s)
+    fly_random_leg(conn, rng, recover_s)
     wait_mode(conn, "RTL")
     if not wait_disarmed(conn):
         print("  WARNING: vehicle never disarmed after RTL - log may be truncated", flush=True)
@@ -189,24 +223,29 @@ def generate_one_flight(conn, fault_type, out_dir, log_dir, index,
     log_path = newest_bin_log(log_dir, start_mtime)
     if log_path is None:
         print(f"  no new .BIN found in {log_dir} - copy it manually", flush=True)
-        return
+        return None
+    if previous_log_path is not None and log_path == previous_log_path:
+        print(f"  {log_path} is the same log as the previous flight - skipping (check LOG_FILE_DSRMROT)", flush=True)
+        return log_path
 
     Path(out_dir).mkdir(parents=True, exist_ok=True)
     out_bin = Path(out_dir) / f"sitl_{fault_type}_{index}.bin"
     out_json = Path(out_dir) / f"sitl_{fault_type}_{index}.fault_windows.json"
     shutil.copy(log_path, out_bin)
-    out_json.write_text(json.dumps([{"fault": fault_type, "start_s": fault_start_s, "end_s": fault_end_s}]))
+    out_json.write_text(json.dumps(windows))
     print(f"  wrote {out_bin} + {out_json}", flush=True)
+    return log_path
 
 
 def main():
     parser = argparse.ArgumentParser(description="Generate labeled ArduPilot SITL fault logs.")
-    parser.add_argument("--fault", required=True, choices=list(FAULT_PARAMS))
+    parser.add_argument("--fault", required=True, choices=list(FAULT_PARAMS) + ["none"])
     parser.add_argument("--count", type=int, default=10)
     parser.add_argument("--connection", default="udp:127.0.0.1:14550")
     parser.add_argument("--sitl-log-dir", required=True, help="ArduPilot SITL's logs/ directory")
     parser.add_argument("--out-dir", default="data")
     parser.add_argument("--start-index", type=int, default=1)
+    parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
 
     conn = mavutil.mavlink_connection(args.connection)
@@ -214,11 +253,16 @@ def main():
     conn.mav.request_data_stream_send(conn.target_system, conn.target_component, mavutil.mavlink.MAV_DATA_STREAM_ALL, 10, 1)
     threading.Thread(target=heartbeat_loop, args=(conn,), daemon=True).start()
     set_param(conn, "DISARM_DELAY", 0)
+    set_param(conn, "LOG_FILE_DSRMROT", 1)
 
+    rng = random.Random(args.seed)
+    previous_log_path = None
     for i in range(args.count):
         index = args.start_index + i
         print(f"Flight {i + 1}/{args.count}: injecting {args.fault} (index {index})", flush=True)
-        generate_one_flight(conn, args.fault, args.out_dir, args.sitl_log_dir, index)
+        previous_log_path = generate_one_flight(
+            conn, args.fault, args.out_dir, args.sitl_log_dir, index, rng, previous_log_path,
+        ) or previous_log_path
 
 
 if __name__ == "__main__":

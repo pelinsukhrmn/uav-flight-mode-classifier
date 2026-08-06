@@ -44,9 +44,25 @@ class FakeConnection:
         return self._messages.pop(0)
 
 
+def test_load_flight_log_keeps_att_angles_in_degrees(monkeypatch):
+    messages = [
+        _fake_message("ATT", TimeUS=1_000_000, Roll=30.0, Pitch=-15.0),
+        _fake_message("CTUN", TimeUS=1_000_000, CRt=1.5),
+        _fake_message("GPS", TimeUS=1_000_000, Spd=4.0),
+    ]
+    monkeypatch.setattr(al.mavutil, "mavlink_connection", lambda path: FakeConnection(messages))
+
+    data = al.load_flight_log("fake_log_path")
+
+    assert data["roll_angle"].iloc[0] == 30.0
+    assert data["pitch_angle"].iloc[0] == -15.0
+    assert data["vertical_speed"].iloc[0] == 1.5
+    assert data["horizontal_speed"].iloc[0] == 4.0
+
+
 def test_load_native_fault_ground_truth_maps_thrust_loss_check_after_arming(monkeypatch):
     messages = [
-        _fake_message("EV", Id=al.EV_ARMED_ID, TimeUS=1_000_000),
+        _fake_message("EV", Id=al.EV_ARMED_IDS[0], TimeUS=1_000_000),
         _fake_message("ERR", Subsys=25, ECode=1, TimeUS=3_000_000),
     ]
     monkeypatch.setattr(al.mavutil, "mavlink_connection", lambda path: FakeConnection(messages))
@@ -62,10 +78,56 @@ def test_load_native_fault_ground_truth_maps_thrust_loss_check_after_arming(monk
     assert list(ground_truth_df["ground_truth_mode"]) == ["normal", "normal", "normal", "motor_out", "motor_out"]
 
 
-def test_load_native_fault_ground_truth_returns_none_without_armed_event(monkeypatch):
+def test_load_native_fault_ground_truth_falls_back_to_first_log_row_without_armed_event(monkeypatch):
     messages = [_fake_message("ERR", Subsys=25, ECode=1, TimeUS=3_000_000)]
     monkeypatch.setattr(al.mavutil, "mavlink_connection", lambda path: FakeConnection(messages))
-    assert al.load_native_fault_ground_truth("fake_log_path") is None
+
+    fake_data = pd.DataFrame({
+        "timestamp": [2_000_000, 3_000_000, 4_000_000],
+        "vertical_speed": [0.0] * 3,
+    })
+    monkeypatch.setattr(al, "load_flight_log", lambda path: fake_data.copy())
+
+    ground_truth_df = al.load_native_fault_ground_truth("fake_log_path")
+
+    assert list(ground_truth_df["ground_truth_mode"]) == ["normal", "motor_out", "motor_out"]
+
+
+def test_load_native_fault_ground_truth_accepts_auto_armed_event(monkeypatch):
+    messages = [
+        _fake_message("EV", Id=15, TimeUS=1_000_000),
+        _fake_message("ERR", Subsys=25, ECode=1, TimeUS=2_000_000),
+    ]
+    monkeypatch.setattr(al.mavutil, "mavlink_connection", lambda path: FakeConnection(messages))
+
+    fake_data = pd.DataFrame({
+        "timestamp": [0, 1_000_000, 2_000_000, 3_000_000],
+        "vertical_speed": [0.0] * 4,
+    })
+    monkeypatch.setattr(al, "load_flight_log", lambda path: fake_data.copy())
+
+    ground_truth_df = al.load_native_fault_ground_truth("fake_log_path")
+
+    assert list(ground_truth_df["ground_truth_mode"]) == ["normal", "normal", "motor_out", "motor_out"]
+
+
+def test_load_native_fault_ground_truth_clears_fault_on_resolved_err(monkeypatch):
+    messages = [
+        _fake_message("EV", Id=10, TimeUS=1_000_000),
+        _fake_message("ERR", Subsys=25, ECode=1, TimeUS=2_000_000),
+        _fake_message("ERR", Subsys=25, ECode=0, TimeUS=4_000_000),
+    ]
+    monkeypatch.setattr(al.mavutil, "mavlink_connection", lambda path: FakeConnection(messages))
+
+    fake_data = pd.DataFrame({
+        "timestamp": [1_000_000, 2_000_000, 3_000_000, 4_000_000, 5_000_000],
+        "vertical_speed": [0.0] * 5,
+    })
+    monkeypatch.setattr(al, "load_flight_log", lambda path: fake_data.copy())
+
+    ground_truth_df = al.load_native_fault_ground_truth("fake_log_path")
+
+    assert list(ground_truth_df["ground_truth_mode"]) == ["normal", "motor_out", "motor_out", "normal", "normal"]
 
 
 def test_load_fault_ground_truth_prefers_sidecar_over_native(tmp_path, monkeypatch):

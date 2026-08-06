@@ -195,7 +195,7 @@ def wait_for_armed(conn, armed, timeout=45, resend_interval=3):
     return False
 
 
-def wait_for_ekf_position_ok(conn, timeout=30):
+def wait_for_ekf_position_ok(conn, timeout=150):
     required = EKF_POS_HORIZ_ABS | EKF_POS_VERT_ABS
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -257,27 +257,17 @@ def send_takeoff_with_retry(conn, altitude, timeout=20, resend_interval=3):
 
 def flight_loop(conn, fault_sequence, background_s, hold_s, recover_s, altitude, climb_wait_s):
     global FLIGHT_START_WALL
-    FLIGHT_START_WALL = time.time()
+
+    if not wait_for_ekf_position_ok(conn):
+        print("WARNING: EKF position never reported ok - attempting arm anyway", flush=True)
+
+    if not wait_for_home_position(conn):
+        print("WARNING: home position never confirmed - attempting arm anyway", flush=True)
 
     wait_for_mode(conn, "GUIDED")
     if not wait_for_armed(conn, True):
         print("WARNING: never confirmed armed - proceeding anyway, flight will likely be invalid", flush=True)
-
-    if not wait_for_ekf_position_ok(conn):
-        print("WARNING: EKF position never reported ok - attempting takeoff anyway", flush=True)
-
-    if not wait_for_home_position(conn):
-        print("WARNING: home position never confirmed - attempting takeoff anyway", flush=True)
-
-    print("Settling 8s after arming before takeoff (re-arming if needed)...", flush=True)
-    settle_deadline = time.time() + 8
-    while time.time() < settle_deadline:
-        with STATE_LOCK:
-            armed = STATE["armed"]
-        if not armed:
-            print("  re-arming during settle wait...", flush=True)
-            wait_for_armed(conn, True, timeout=10)
-        time.sleep(0.5)
+    FLIGHT_START_WALL = time.time()
 
     if not send_takeoff_with_retry(conn, altitude):
         print("WARNING: takeoff command never ACKed as accepted - proceeding anyway", flush=True)

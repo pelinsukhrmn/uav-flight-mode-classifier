@@ -2,8 +2,13 @@
 import json
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 from pymavlink import mavutil
+
+LOG_FEATURES = ["vertical_speed", "horizontal_speed", "roll_angle", "pitch_angle",
+                "motor_spread", "ekf_vel_innov", "baro_climb_rate",
+                "roll_track_err", "pitch_track_err"]
 
 EV_ARMED_IDS = (10, 15)
 ERR_CODE_RESOLVED = 0
@@ -19,26 +24,59 @@ ERR_SUBSYS_TO_FAULT = {
 def load_flight_log(log_path):
     log = mavutil.mavlink_connection(str(log_path))
 
-    att_rows, ctun_rows, gps_rows = [], [], []
+    att_rows, ctun_rows, gps_rows, rcou_rows, xkf_rows, baro_rows = [], [], [], [], [], []
     while True:
-        msg = log.recv_match(type=["ATT", "CTUN", "GPS"], blocking=False)
+        msg = log.recv_match(type=["ATT", "CTUN", "GPS", "RCOU", "XKF4", "BARO"], blocking=False)
         if msg is None:
             break
         msg_type = msg.get_type()
         if msg_type == "ATT":
-            att_rows.append({"timestamp": msg.TimeUS, "roll_angle": msg.Roll, "pitch_angle": msg.Pitch})
+            att_rows.append({
+                "timestamp": msg.TimeUS, "roll_angle": msg.Roll, "pitch_angle": msg.Pitch,
+                "roll_track_err": abs(msg.DesRoll - msg.Roll), "pitch_track_err": abs(msg.DesPitch - msg.Pitch),
+            })
         elif msg_type == "CTUN":
             ctun_rows.append({"timestamp": msg.TimeUS, "vertical_speed": msg.CRt})
         elif msg_type == "GPS":
             gps_rows.append({"timestamp": msg.TimeUS, "horizontal_speed": msg.Spd})
+        elif msg_type == "RCOU":
+            outputs = [msg.C1, msg.C2, msg.C3, msg.C4]
+            rcou_rows.append({"timestamp": msg.TimeUS, "motor_spread": max(outputs) - min(outputs)})
+        elif msg_type == "XKF4" and getattr(msg, "C", 0) == 0:
+            xkf_rows.append({"timestamp": msg.TimeUS, "ekf_vel_innov": msg.SV})
+        elif msg_type == "BARO" and getattr(msg, "I", 0) == 0:
+            baro_rows.append({"timestamp": msg.TimeUS, "baro_alt": msg.Alt})
 
-    att_df = pd.DataFrame(att_rows).sort_values("timestamp")
-    ctun_df = pd.DataFrame(ctun_rows).sort_values("timestamp")
-    gps_df = pd.DataFrame(gps_rows).sort_values("timestamp")
+    def to_frame(rows):
+        frame = pd.DataFrame(rows)
+        return frame.sort_values("timestamp") if not frame.empty else frame
 
-    data = pd.merge_asof(att_df, ctun_df, on="timestamp", direction="nearest")
-    data = pd.merge_asof(data, gps_df, on="timestamp", direction="nearest")
-    return data[["timestamp", "vertical_speed", "horizontal_speed", "roll_angle", "pitch_angle"]]
+    att_df = to_frame(att_rows)
+    ctun_df = to_frame(ctun_rows)
+    gps_df = to_frame(gps_rows)
+    rcou_df = to_frame(rcou_rows)
+    xkf_df = to_frame(xkf_rows)
+    baro_df = to_frame(baro_rows)
+
+    if not baro_df.empty:
+        baro_df["baro_climb_rate"] = (
+            baro_df["baro_alt"].diff() / (baro_df["timestamp"].diff() / 1e6)
+        ).replace([np.inf, -np.inf], 0.0).fillna(0.0)
+        baro_df = baro_df[["timestamp", "baro_climb_rate"]]
+
+    data = att_df
+    for frame, column in ((ctun_df, "vertical_speed"), (gps_df, "horizontal_speed"),
+                          (rcou_df, "motor_spread"), (xkf_df, "ekf_vel_innov"),
+                          (baro_df, "baro_climb_rate")):
+        if data.empty:
+            break
+        if frame.empty:
+            data[column] = 0.0
+        else:
+            data = pd.merge_asof(data, frame, on="timestamp", direction="nearest")
+    if data.empty:
+        return data
+    return data[["timestamp"] + LOG_FEATURES]
 
 
 def _sidecar_path(log_path):
